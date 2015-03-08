@@ -23,4 +23,4 @@ Run the script as another service script, include it in system boot sequence usi
 Put the script it in the /etc/init.d/ folder
 
 ##### Requires:
-	* A Debian based distribution
+  * A Debian based distribution
