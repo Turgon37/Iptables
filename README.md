@@ -4,7 +4,7 @@ This project is licensed under the terms of the MIT license
 
 This is a shell script which provide a way to load iptables rules based on a configuration file.
 
-It consists in a main script iptables.sh which is launch by init(1) program and a configuration file localized by default to /etc/default/iptables
+It consists in a main script iptables.sh which is launch by init(1) program at system runtime and a configuration file localized by default to /etc/default/iptables which contains all rules configuration string
 
 The main script is written to run as a service script
 
