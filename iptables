@@ -69,8 +69,8 @@ IS_VERBOSE=0
 # Don't touch unless you know what you are doing
 # all regex whose begin with E_ prefix are wrote in extended regex language
 # REGEX that describe a IFACE name
-REG_IFACE='\([a-zA-Z*][a-zA-Z0-9*]\*\)'
-E_REG_IFACE='([a-zA-Z*][a-zA-Z0-9*]*)'
+REG_IFACE='\([a-zA-Z*][a-zA-Z0-9*]*+\?\)'
+E_REG_IFACE='([a-zA-Z*][a-zA-Z0-9*]*+?)'
 
 # REGEX that describe a network ipv4 address
 REG_IPV4='\(\(\([0-9]\|[1-9][0-9]\|1[0-9]\{2\}\|2[0-4][0-9]\|25[0-5]\).\)\{3\}\([0-9]\|[1-9][0-9]\|1[0-9]\{2\}\|2[0-4][0-9]\|25[0-5]\)\(/\([0-9]\|[12][0-9]\|3[0-2]\)\)\?\)'
@@ -80,7 +80,7 @@ E_REG_IPV4='((([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5]).){3}([0-9]|[1-9][
 REG_PORT='\([0-9]\{1,4\}\|[1-5][0-9]\{4\}\|6[0-4][0-9]\{3\}\|65[0-4][0-9]\{2\}\|655[0-2][0-9]\|6553[0-5]\)'
 E_REG_PORT='([0-9]{1,4}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5])'
 
-# REGEX that describe a port range like PORT-PORT (use this for port mtching)
+# REGEX that describe a port range like PORT-PORT (use this for port matching)
 REG_RANGE="\(${REG_PORT}\(-${REG_PORT}\)\?\)"
 E_REG_RANGE="(${E_REG_PORT}(-${E_REG_PORT})?)"
 
@@ -133,16 +133,25 @@ function parseProtocol() {
   expr match "$1" "$REG_PROTO:.*"
 }
 
+# Retrieve the source port (range) when this is the only parameter given
+# @param[string] : the input string
+function parsePortDstOnly() {
+  str=$(expr match "$1" ".*:$REG_RANGE")
+  echo -n ${str//-/:}
+}
+
 # Retrieve the source port (range) string from a input string
 # @param[string] : the input string
 function parsePortSrc() {
-  expr match "$1" ".*:$REG_RANGE:.*"
+  str=$(expr match "$1" ".*:$REG_RANGE:.*")
+  echo -n ${str//-/:}
 }
 
 # Retrieve the destination port (range) string from a input string
 # @param[string] : the input string
 function parsePortDst() {
-  expr match "$1" ".*:.*:$REG_RANGE"
+  str=$(expr match "$1" ".*:.*:$REG_RANGE")
+  echo -n ${str//-/:}
 }
 
 # Retrieve the ipv4 address from a input string
@@ -154,7 +163,7 @@ function parseAddress() {
 # Retrieve the input iface name string from a input string
 # @param[string] : the input string
 function parseIfaceInput() {
-  expr match "$1" "\([a-zA-Z*][a-zA-0-9*]\*\)"
+  expr match "$1" "$REG_IFACE"
 }
 
 # Retrieve the output iface name string from a input string
@@ -165,7 +174,7 @@ function parseIfaceOutput() {
 
 
 ### ---
-### RULES
+### RULES MGMT
 ### ---
 # Remove all rules in all chains
 function _rules_flush() {
@@ -209,8 +218,93 @@ function _policy {
   fi
 }
 
-
-
+### ---
+### GLOBAL RULES LOADING
+### ---
+# Load network rules
+# @param[string] : the name of the table in which to load the rules
+#        INPUT OUTPUT FORWARD
+# @param[string] : the configuration string from configuration file
+function _load_rules() {
+  # Loop for each rule (separated by space)
+  for entry in $2; do
+    _debug "reading config entry : $entry"
+    local protocol=
+    local src_port=
+    local dst_port=
+    local src_address=
+    local dst_address=
+    local in_iface=
+    local out_iface=
+    # Loop for each command (separated by F_SEP, pipe as default)
+    for c in ${entry//${F_SEP}/ }; do
+      # partial port (dst only) matching
+      if [[ "$c" =~ ^${E_REG_PROTO}${C_SEP}${E_REG_RANGE}$ ]]; then
+        _debug "  => proto+port : $c"
+        protocol=$(parseProtocol "$c")
+        if [[ -n $protocol ]]; then
+          protocol="--protocol $protocol"
+        fi
+        dst_port=$(parsePortDstOnly "$c")
+        if [[ -n $dst_port ]]; then
+          dst_port="--destination-port $dst_port"
+        fi
+      # full port (dst+src) matching
+      elif [[ "$c" =~ ^${E_REG_PROTO}${C_SEP}${E_REG_RANGE}${C_SEP}${E_REG_RANGE}$ ]]; then
+        _debug "  => proto+port+port : $c"
+        protocol=$(parseProtocol "$c")
+        if [[ -n $protocol ]]; then
+          protocol="--protocol $protocol"
+        fi
+        src_port=$(parsePortSrc "$c")
+        if [[ -n $src_port ]]; then
+          src_port="--source-port $src_port"
+        fi
+        dst_port=$(parsePortDst "$c")
+        if [[ -n $dst_port ]]; then
+          dst_port="--destination-port $dst_port"
+        fi
+      # src address matching
+      elif [[ "$c" =~ ^${E_REG_SRC}${C_SEP}${E_REG_IPV4}$ ]]; then
+        _debug "  => src addr : $c"
+        src_address=$(parseAddress "$c")
+        if [[ -n $src_address && $src_address != '*' ]]; then
+          src_address="--source $src_address"
+        else
+          src_address=
+        fi
+      # dst address matching
+      elif [[ "$c" =~ ^${E_REG_DST}${C_SEP}${E_REG_IPV4}$ ]]; then
+        _debug "  => dst addr : $c"
+        dst_address=$(parseAddress "$c")
+        if [[ -n $dst_address && $dst_address != '*' ]]; then
+          dst_address="--destination $dst_address"
+        else
+          dst_address=
+        fi
+      # iface reading matching
+      elif [[ "$c" =~ ^${E_REG_IFACE}${C_SEP}${E_REG_IFACE}$ ]]; then
+        _debug "  => iface+iface : $c"
+        in_iface=$(parseIfaceInput "$c")
+        if [[ -n $in_iface ]]; then
+          in_iface="--in-interface $in_iface"
+        else
+          in_iface=
+        fi
+        out_iface=$(parseIfaceOutput "$c")
+        if [[ -n $out_iface && $out_iface != '*' ]]; then
+          out_iface="--out-interface $out_iface"
+        else
+          out_iface=
+        fi
+      else
+        _debug "  # error : $c"
+      fi
+    done
+    _echo "$IPTABLES --table filter --append $1 $in_iface $out_iface $src_address $dst_address $protocol $src_port $dst_port"
+    
+  done
+}
 
 
 
@@ -236,51 +330,12 @@ if [ -z "$IF_CONFIG_SOURCED" ]; then
   exit 1
 fi
 
-IS_DEBUG=1
+
 IS_VERBOSE=1
 
-for entry in $FORWARDED; do
-  _debug "entry : $entry"
-  protocol=
-  src_port=
-  dst_port=
-  src_address=
-  dst_address=
-  in_iface=
-  out_iface=
-  for c in ${entry//${F_SEP}/ }; do
-    # full port (dst+src) matching
-    if [[ "$c" =~ ^${E_REG_PROTO}${C_SEP}${E_REG_RANGE}$ ]]; then
-      _debug "  => proto+port : $c"
-      protocol=$(parseProtocol "$c")
-      dst_port=$(parsePortSrc "$c")
-    elif [[ "$c" =~ ^${E_REG_PROTO}${C_SEP}${E_REG_RANGE}${C_SEP}${E_REG_RANGE}$ ]]; then
-      _debug "  => proto+port+port : $c"
-      protocol=$(parseProtocol "$c")
-      src_port=$(parsePortSrc "$c")
-      dst_port=$(parsePortDst "$c")
-    # src address matching
-    elif [[ "$c" =~ ^${E_REG_SRC}${C_SEP}${E_REG_IPV4}$ ]]; then
-      _debug "  => src addr : $c"
-      src_address=$(parseAddress "$c")
-    # dst address matching
-    elif [[ "$c" =~ ^${E_REG_DST}${C_SEP}${E_REG_IPV4}$ ]]; then
-      _debug "  => dst addr : $c"
-      dst_address=$(parseAddress "$c")
-    # iface reading matching
-    elif [[ "$c" =~ ^${E_REG_IFACE}${C_SEP}${E_REG_IFACE}$ ]]; then
-      _debug "  => iface+iface : $c"
-      echo $(parseIfaceInput "$c")
-      in_iface=$(parseIfaceInput "$c")
-      out_iface=$(parseIfaceOutput "$c")
-    else
-      _debug "  # error : $c"
-    fi
-  done
-  _echo $IPTABLES --table filter -i $in_iface -o $out_iface -s $src_address -d $dst_address -p $protocol -sport $src_port -dport $dst_port  
-  
-done
 
+
+_load_rules 'INPUT' "$FORWARDED"
 exit 0
 
 ###############################
