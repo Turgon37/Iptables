@@ -26,7 +26,7 @@
 # version 2.2 : 2014-10-26
 #    +add a new configuration file /etc/default/iptables
 #    +set routing rules by a loop for configuration file
-# version 3.0 : 2015-03-09
+# version 3.0 : 2015-03-25
 #    +refunding main loop and core processing, full dynamic loading
 #
 VERSION='3.0'
@@ -35,7 +35,7 @@ VERSION='3.0'
 #========== INTERNAL OPTIONS ==========#
 IPTABLES="dump"
 IP6TABLES=$(which ip6tables)
-#IPTABLES_CONFIG=/etc/default/$NAME
+#IPTABLES_CONFIG=/etc/default/iptables
 IPTABLES_CONFIG=./config
 
 IPTABLES_BACKUP_FILE=/etc/iptables.backup
