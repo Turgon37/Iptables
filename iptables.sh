@@ -34,7 +34,7 @@ VERSION='3.0'
 
 #========== INTERNAL OPTIONS ==========#
 IPTABLES="dump"
-IP6TABLES=$(which ip6tables)
+IP6TABLES=$(which ip6tables 2>/dev/null 1>&2)
 #IPTABLES_CONFIG=/etc/default/iptables
 IPTABLES_CONFIG=./config
 
@@ -89,10 +89,45 @@ function dump() {
 }
 
 
+# Print help msg
+function _usage() {
+  echo -e "Usage : $0 [OPTION...] COMMAND
+
+An iptables bash loader script
+
+Version : $VERSION
+
+Command :
+  start     load the firewall rules into kernel
+  stop      unload and flush all rules from firewall
+  restart   reload all rules (use after configuration editing)
+  list      List all current iptables rules
+  save      save all rules in a file
+  restore   restore all rules from a file
+  test      Test command : provide a test procedure to reload
+              new rules after configuration editing. Fi the new rules
+              cause a connection break the old rules are automatically
+              replaced
+  help      Show this help message
+
+Options :
+  -v, --verbose   Show more running messages 
+  -d, --debug     Show debug messages
+  
+Return code :
+  0     Success
+  99    Unknown error
+  200   Need to be root
+  201   Bad system arguments
+  202   Missing COMMAND in shell args
+  203   Missing a system needed program
+"
+}
+
 # Print a msg to stdout if verbose option is set
 # @param[string] : the msg to write in stdout
 function _echo() {
-  if [ $IS_VERBOSE -eq 1 ]; then
+  if [[ $IS_VERBOSE -eq 1 ]]; then
     echo -e "$@"
   fi
 }
@@ -100,7 +135,7 @@ function _echo() {
 # Print a msg to stderr if verbose option is set
 # @param[string] : the msg to write in stderr
 function _error() {
-  if [ $IS_VERBOSE -eq 1 ]; then
+  if [[ $IS_VERBOSE -eq 1 ]]; then
     echo -e "Error : $@" 1>&2
   fi
 }
@@ -108,16 +143,16 @@ function _error() {
 # Print a msg to stdout if debug verbose is set
 # @param[string] : the msg to write in stdout
 function _debug() {
-  if [ $IS_DEBUG -eq 1 ]; then
+  if [[ $IS_DEBUG -eq 1 ]]; then
     echo -e "debug: $@"
   fi
 }
 
 # Check if the script is run by root or not. If not, prompt error and exit
 function _isRunAsRoot() {
-  if [ "$(id -u)" != "0" ]; then
-    log_failure_msg "$DESC: This script must be run as root."
-    exit 1
+  if [[ "$(id -u)" != "0" ]]; then
+    _error "This script must be run as root."
+    exit 200
   fi
 }
 
@@ -240,12 +275,16 @@ function _policy {
 #                103 if the table name is not in INPUT, OUTPUT, FORWARD
 function _load_filter_rules() {
   # bad table name
-  if [[ ! $1 =~ ^INPUT|OUTPUT|FORWARD$ ]]; then
+  if [[ ! $1 =~ ^(INPUT|OUTPUT|FORWARD)$ ]]; then
     return 103
   fi
   # Loop for each rule (separated by space)
   for entry in $2; do
     _debug "reading config entry : $entry"
+    if [[ ${entry:0:1} = "#" ]]; then
+      _debug "  => comment : $entry"
+      continue
+    fi
     local protocol=
     local src_port=
     local dst_port=
@@ -371,9 +410,152 @@ function _load_anti_ddos_rules() {
 
 
 
-###### RUNNING ######
-IS_VERBOSE=1
 
+
+
+
+
+
+
+
+# Save all firewall rules in a save file
+# return[int] : x	the save command return status
+#			100 if save command is not found
+function do_save() {
+  IPTABLES_SAVE=$(which iptables-save 2>/dev/null)
+  if [[ -z "${IPTABLES_SAVE}" ]]; then
+    return 100
+  fi
+  ${IPTABLES_SAVE} > ${IPTABLES_BACKUP_FILE}
+}
+
+# Restore all firewall rules from a file
+# return :	x	the restore command return status
+#			100 if restore command is not found
+function do_restore() {
+  IPTABLES_RESTORE=$(which iptables-restore 2>/dev/null)
+  if [[ -z "${IPTABLES_RESTORE}" ]]; then
+    return 100
+  fi
+  if [[ -r "${IPTABLES_BACKUP_FILE}" ]]; then
+    ${IPTABLES_RESTORE} < ${IPTABLES_BACKUP_FILE}
+  fi
+}
+
+#========== MAIN FUNCTION ==========#
+# Main
+# param	:same of the script
+# return	:
+function main() {
+  _isRunAsRoot
+  
+  ### ARGUMENTS PARSING  
+  for i in `seq $(($#+1))`; do
+    #catch main arguments
+    case $1 in
+    -v|--verbose) IS_VERBOSE=1;;
+    -d|--debug) IS_DEBUG=1;;
+    -*) _error "invalid option -- '$1'"
+        exit 201;;
+    *)  if [[ $# -ge 1 ]]; then # GOT NEEDED ARGUMENTS
+          COMMAND=$1
+          break #stop reading arguments
+        else 
+          _error 'missing command'
+          exit 202
+        fi
+      ;;
+    esac
+
+    if [[ $# -lt 1 ]]; then
+      _error 'missing command'
+      exit 202
+    fi
+
+    shift
+  done
+
+  case "$COMMAND" in
+  start)
+    _echo "Setting firewall rules. Enable firewall secure policy"
+    do_start
+    case $? in
+    0|1) _echo "Success";;
+    *) _error "Failed to start the firewall.";;
+    esac
+    ;;
+  stop)
+    _echo "Removing firewall rules. Turn firewall to open policy"
+    do_stop
+    case $? in
+    0|1) _echo "=> Success";;
+    *) _error "Failed to stop the firewall.";;
+    esac
+    ;;
+  restart)
+    _echo "Re-setting firewall rules"
+    do_restart
+    case $? in
+    # restart success
+    0|1) _echo "=> Success";;
+    # start failed
+    2) _error "Failed to start the firewall.";;
+    # stop failed
+    3) _error "Failed to stop the firewall.";;
+    esac
+    ;;
+  list)
+    echo '################ FILTER ################'
+    $IPTABLES --table filter --list --line-numbers --numeric --verbose | sed 's/ \/\*/\t\t\/\*/'
+    echo '################ NAT ################'
+    $IPTABLES --table nat --list --line-numbers --numeric --verbose | sed 's/ \/\*/\t\t\/\*/'
+    ;;
+  restore)
+    _echo "Loading firewall rules from ${IPTABLES_BACKUP_FILE}"
+    do_restore
+    case "$?" in
+    0) _echo "=> Success";;
+    100)
+      _echo "=> Failure"
+      _error "Restore command not found"
+      exit 203
+      ;;
+    *) 
+      _echo "=> Failure"
+      exit 99
+      ;;
+    esac
+    ;;
+  save)
+    _echo "Saving firewall rules into ${IPTABLES_BACKUP_FILE}"
+    do_save
+    case "$?" in
+    0) _echo "=> Success";;
+    100)
+      _echo "=> Failure"
+      _error "Save command not found"
+      exit 203
+      ;;
+    *) _echo "=> Failure"
+      exit 99
+      ;;
+    esac
+    ;;
+  test)
+    _echo "Testing new firewall rulesets"
+    do_test
+    ;;
+  help)
+    _usage
+    ;;
+  *)
+    echo "Usage: $0 {start|stop|restart|list|save|restore|help|test}"
+    ;;
+  esac
+}
+
+
+###### RUNNING ######
 # Load global configuration
 [[ -r $IPTABLES_CONFIG ]] && source $IPTABLES_CONFIG
 
@@ -389,106 +571,10 @@ if [[ -z "$IF_CONFIG_SOURCED" ]]; then
   #exit 2
 fi
 
-
-
-
-_load_filter_rules 'INPUT' "$INPUT"
-result=$?
-if [[ $? -ne 0 ]]; then exit $?; fi
-_load_filter_rules 'OUTPUT' "$OUTPUT"
-result=$?
-if [[ $? -ne 0 ]]; then exit $?; fi
-_load_filter_rules 'FORWARD' "$FORWARD"
-result=$?
-if [[ $? -ne 0 ]]; then exit $?; fi
-
-
-
-exit 
-###############################
-###############################
-# DO NOT READ UNDER THIS LINE #
-###############################
-###############################
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-#========== MAIN FUNCTION ==========#
-# Main
-# param	:same of the script
-# return	:
-function main() {
-  _check_runas_root
-
-  ### ARGUMENTS PARSING
-  case "$1" in
-  start)
-    log_daemon_msg "Setting firewall rules. Enable firewall secure policy" "$NAME"
-    do_start 2> /dev/null
-    case $? in
-    0|1) log_end_msg 0;;
-    *) log_end_msg 1
-      log_failure_msg "$DESC: Failed to start the firewall."
-      ;;
-    esac
-    ;;
-  stop)
-    log_daemon_msg "Removing firewall rules. Turn firewall to open policy" "$NAME"
-    do_stop 2>/dev/null
-    case $? in
-    0|1)	log_end_msg 0;;
-    *) log_end_msg 1
-      log_failure_msg "$DESC: Failed to stop the firewall."
-      ;;
-    esac
-    ;;
-  restart)
-    log_daemon_msg "Re-setting firewall rules" "$NAME"
-    do_restart 2>/dev/null
-    case $? in
-    # restart success
-    0|1)	log_end_msg 0;;
-    # start failed
-    2)	log_end_msg 1
-      log_failure_msg "$DESC: Failed to start the firewall."
-      ;;
-    # stop failed
-    3)	log_end_msg 1
-      log_failure_msg "$DESC: Failed to stop the firewall."
-      ;;
-    esac
-    ;;
-  restore)
-    log_daemon_msg "Loading firewall rules from ${IPTABLES_BACKUP_FILE}" "$NAME"
-    do_restore 2>/dev/null
-    case "$?" in
-    0|1) log_end_msg 0 ;;
-    *) log_end_msg 1 ;;
-    esac
-    ;;
-  test)
-    log_action_msg "Testing new firewall rulesets" "$NAME"
-    do_test 2>/dev/null
-    ;;
-  *)
-    echo "Usage: $SCRIPTNAME {start|stop|restart|save|restore|test}" >&2
-    exit 3
-    ;;
-  esac
-}
-
 main "$@"
+
+
+
 
 
 
