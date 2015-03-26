@@ -54,8 +54,8 @@ IS_VERBOSE=0
 # Don't touch unless you know what you are doing
 # all regex whose begin with E_ prefix are wrote in extended regex language
 # REGEX that describe a IFACE name
-REG_IFACE='\([a-zA-Z*][a-zA-Z0-9*]*+\?\)'
-E_REG_IFACE='([a-zA-Z*][a-zA-Z0-9*]*+?)'
+REG_IFACE='\([a-zA-Z*][a-zA-Z0-9*]*\)'
+E_REG_IFACE='([a-zA-Z*][a-zA-Z0-9*]*)'
 
 # REGEX that describe a network ipv4 address
 REG_IPV4='\(\(\([0-9]\|[1-9][0-9]\|1[0-9]\{2\}\|2[0-4][0-9]\|25[0-5]\).\)\{3\}\([0-9]\|[1-9][0-9]\|1[0-9]\{2\}\|2[0-4][0-9]\|25[0-5]\)\(/\([0-9]\|[12][0-9]\|3[0-2]\)\)\?\)'
@@ -101,14 +101,14 @@ Command :
   start     load the firewall rules into kernel
   stop      unload and flush all rules from firewall
   restart   reload all rules (use after configuration editing)
-  list      List all current iptables rules
+  list      list all current iptables rules
   save      save all rules in a file
   restore   restore all rules from a file
-  test      Test command : provide a test procedure to reload
+  test      test command : provide a test procedure to reload
               new rules after configuration editing. Fi the new rules
               cause a connection break the old rules are automatically
               replaced
-  help      Show this help message
+  help      show this help message
 
 Options :
   -v, --verbose   Show more running messages 
@@ -121,6 +121,7 @@ Return code :
   201   Bad system arguments
   202   Missing COMMAND in shell args
   203   Missing a system needed program
+  204   Missing restore file
 "
 }
 
@@ -281,6 +282,7 @@ function _load_filter_rules() {
   # Loop for each rule (separated by space)
   for entry in $2; do
     _debug "reading config entry : $entry"
+    # if a sharp is found drop this line, it's a comment line
     if [[ ${entry:0:1} = "#" ]]; then
       _debug "  => comment : $entry"
       continue
@@ -292,8 +294,10 @@ function _load_filter_rules() {
     local dst_address=
     local in_iface=
     local out_iface=
+    local match_opt=
     # Loop for each command (separated by F_SEP, pipe as default)
     for c in ${entry//${F_SEP}/ }; do
+      local match=
       # PARTIAL PORT (dst only) matching
       if [[ "$c" =~ ^${E_REG_PROTO}${C_SEP}${E_REG_RANGE}$ ]]; then
         _debug "  => proto+port : $c"
@@ -338,6 +342,10 @@ function _load_filter_rules() {
         else
           dst_address=
         fi
+      # MATCH matching
+      elif _match "$c"; then
+        _match "$c" 'true'
+        match_opt="$match_opt $match"
       # SINGLE INTERFACE matching
       elif [[ "$c" =~ ^${E_REG_IFACE}$ ]]; then
         _debug "  => iface : $c"
@@ -357,7 +365,7 @@ function _load_filter_rules() {
         else
           in_iface=
           out_iface=
-        fi  
+        fi
       
       # IN/OUT INTERFACE matching
       elif [[ "$c" =~ ^${E_REG_IFACE}${C_SEP}${E_REG_IFACE}$ ]]; then
@@ -392,8 +400,8 @@ function _load_filter_rules() {
         _error "error reading line : $entry"
       fi
     done
-    _echo --table filter --append $1 $in_iface $out_iface $src_address $dst_address $protocol $src_port $dst_port
-    $IPTABLES --table filter --append $1 $in_iface $out_iface $src_address $dst_address $protocol $src_port $dst_port
+    _echo --table filter --append $1 $in_iface $out_iface $src_address $dst_address $protocol $src_port $dst_port $match_opt
+    $IPTABLES --table filter --append $1 $in_iface $out_iface $src_address $dst_address $protocol $src_port $dst_port $match_opt
     result=$?
     if [[ $result -ne 0 ]]; then
       return $result
@@ -401,6 +409,33 @@ function _load_filter_rules() {
   done
   return 0
 }
+
+# Parse matching rules
+# @param[string] : the input string in which search for matching rules
+# @param[boolean] OPTIONNAL : define if the function must parse and return the match string (default false)
+# @return[int] : 0 if a match success and the match command is returned as an echo return
+#                1 if no match is performed
+function _match() {
+  if [[ $2 =~ ^true$ ]]; then
+    local parse=1
+    _debug "  reading matching entry : $1"
+  else
+    local parse=0
+  fi
+  if [[ "$1" =~ ^(c|comment)${C_SEP}[a-zA-Z0-9]+$ ]]; then
+    if [[ $parse -eq 1 ]]; then
+      _debug "    => match : comment : $1"
+      match='-m comment --comment "'$(expr match "$1" 'c:\([a-zA-Z0-9]\+\)')'"'
+    fi
+    return 0
+  fi  
+    
+  match=
+  return 1
+}
+
+
+
 
 
 function _load_anti_ddos_rules() {
@@ -432,6 +467,7 @@ function do_save() {
 # Restore all firewall rules from a file
 # return :	x	the restore command return status
 #			100 if restore command is not found
+#			101 restore file is not found
 function do_restore() {
   IPTABLES_RESTORE=$(which iptables-restore 2>/dev/null)
   if [[ -z "${IPTABLES_RESTORE}" ]]; then
@@ -439,6 +475,7 @@ function do_restore() {
   fi
   if [[ -r "${IPTABLES_BACKUP_FILE}" ]]; then
     ${IPTABLES_RESTORE} < ${IPTABLES_BACKUP_FILE}
+    return 101
   fi
 }
 
@@ -520,6 +557,11 @@ function main() {
       _error "Restore command not found"
       exit 203
       ;;
+    101)
+      _echo "=> Failure"
+      _error "Restore file not found"
+      exit 204
+      ;;
     *) 
       _echo "=> Failure"
       exit 99
@@ -571,7 +613,11 @@ if [[ -z "$IF_CONFIG_SOURCED" ]]; then
   #exit 2
 fi
 
-main "$@"
+IS_VERBOSE=1
+_load_filter_rules INPUT "$INPUT"
+#_load_filter_rules FORWARD "$FORWARD"
+#_load_filter_rules OUTPUT "$OUTPUT"
+#main "$@"
 
 
 
