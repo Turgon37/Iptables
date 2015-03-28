@@ -35,6 +35,7 @@ INPUT=
 OUTPUT=
 FORWARD=
 COMMANDS=
+IS_ROUTER=0
 DEFAULT_ACTION=ACCEPT
 TIMEOUT_FOR_TEST=9
 
@@ -79,14 +80,12 @@ readonly E_REG_PORT='([0-9]{1,4}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|65
 readonly REG_RANGE="\(${REG_PORT}\(-${REG_PORT}\)\?\)"
 readonly E_REG_RANGE="(${E_REG_PORT}(-${E_REG_PORT})?)"
 
-# REGEX that describe the source addr
-readonly E_REG_SRC='(s|src)'
-
-# REGEX that describe the destination addr
-readonly E_REG_DST='(d|dst)'
-
-# REGEX that wualify a network which has a gateway
+# REGEX that qualify a network which has a gateway
 readonly E_REG_GW="(${C_SEP}gw)"
+
+#REGEX that describe a connection state
+readonly E_REG_STATE="(INVALID|ESTABLISHED|NEW|RELATED|UNTRACKED)"
+readonly REG_STATE="\(INVALID\|ESTABLISHED\|NEW\|RELATED\|UNTRACKED\)"
 
 
 #========== INTERNAL FUNCTIONS ==========#
@@ -234,10 +233,10 @@ function _policy {
     $IPTABLES --table filter --policy INPUT ACCEPT
     $IPTABLES --table filter --policy OUTPUT ACCEPT
 
-    if [[ 1 -eq 1 ]]; then
-      $IPTABLES --table filter -P FORWARD ACCEPT
+    if _isTrue $IS_ROUTER; then
+      $IPTABLES --table filter --policy FORWARD ACCEPT
     else
-      $IPTABLES --table filter -P FORWARD DROP
+      $IPTABLES --table filter --policy FORWARD DROP
     fi
 
     # NAT
@@ -269,22 +268,22 @@ function _load_anti_ddos_rules() {
 ### GLOBAL RULES LOADING
 ### ---
 # Load network rules
-# @param[string] : the name of the table in which to load the rules
-#        INPUT OUTPUT FORWARD
+# @param[string] : the name of the chain in which to load the rules
 # @param[string] : the configuration string from configuration file
+# @param[string] OPTIONNAL : the table name in which include new rules
 # @return[int] : 0 if all rule are correctly set
 #                X  the iptables return code
 #                100 if an input rule is declare with a output interface
 #                101 if an output rule is declare with a input interface
 #                102 if a single interface is given for FORWARD table
-#                103 if the table name is not in INPUT, OUTPUT, FORWARD
 #                105 a incorrect character have been found in given list of command
-function _load_filter_rules() {
-  # bad table name
-  if [[ ! "$1" =~ ^(INPUT|OUTPUT|FORWARD)$ ]]; then
-    _error 'The selected table is incorrect'
-    return 103
+function _load_rules() {
+  local chain=$1
+  local table=$3
+  if [[ -z $table ]]; then
+    table=filter
   fi
+  
   if [[ "$2" =~ $E_REG_FORBID ]]; then
     _error 'An forbidden character is found'
     return 105
@@ -314,7 +313,7 @@ function _load_filter_rules() {
       local protocol=
       local action=
       # SOURCE ADDRESS matching
-      if [[ "$c" =~ ^${E_REG_SRC}${C_SEP}${E_REG_IPV4}$ ]]; then
+      if [[ "$c" =~ ^(s|src)${C_SEP}${E_REG_IPV4}$ ]]; then
         _debug "  => src addr : $c"
         src_address=$(parseAddress4 "$c" '.*'${C_SEP})
         if [[ -n $src_address && $src_address != '*' ]]; then
@@ -323,7 +322,7 @@ function _load_filter_rules() {
           src_address=
         fi
       # DESTINATION ADDRESS matching
-      elif [[ "$c" =~ ^${E_REG_DST}${C_SEP}${E_REG_IPV4}$ ]]; then
+      elif [[ "$c" =~ ^(d|dst)${C_SEP}${E_REG_IPV4}$ ]]; then
         _debug "  => dst addr : $c"
         dst_address=$(parseAddress4 "$c" '.*'${C_SEP})
         if [[ -n $dst_address && $dst_address != '*' ]]; then
@@ -348,11 +347,11 @@ function _load_filter_rules() {
         if [[ -n $iface ]]; then
           # error during forward rule with an unique interface
           if [[ $1 = 'FORWARD' ]]; then
-            _error "single interface in FORWARD table (ambiguous rules) '$entry'"
+            _error "single interface in $chain chain (ambiguous rules) '$entry'"
             return 102
-          elif [[ "$1" = 'INPUT' ]]; then
+          elif [[ "$1" =~ INPUT|PREROUTING ]]; then
             in_iface="--in-interface $iface"
-          elif [[ "$1" = 'OUTPUT' ]]; then
+          elif [[ "$1" =~ OUTPUT|POSTROUTING ]]; then
             out_iface="--out-interface $iface"
           fi
         else
@@ -368,8 +367,8 @@ function _load_filter_rules() {
         in_iface=$(parseIface "$c")
         if [[ -n $in_iface ]]; then
           # error during output rule with an input interface
-          if [[ $1 = 'OUTPUT' ]]; then
-            _error "input interface in OUTPUT table '$entry'"
+          if [[ $1 =~ OUTPUT|POSTROUTING ]]; then
+            _error "input interface in $chain chain '$entry'"
             return 101
           fi
           in_iface="--in-interface $in_iface"
@@ -381,8 +380,8 @@ function _load_filter_rules() {
         out_iface=$(parseIface "$c" '.*'${C_SEP})
         if [[ -n $out_iface && $out_iface != '*' ]]; then
           # error during input rule with an output interface
-          if [[ $1 = 'INPUT' ]]; then
-            _error "output interface in INPUT table '$entry'"
+          if [[ $1 =~ INPUT|PREROUTING ]]; then
+            _error "output interface in $chain chain '$entry'"
             return 100
           fi
           out_iface="--out-interface $out_iface"
@@ -397,7 +396,7 @@ function _load_filter_rules() {
     if [[ -z $action_opt ]]; then
       action_opt="--jump $DEFAULT_ACTION"
     fi
-    $IPTABLES --table filter --append $1 $in_iface $out_iface $src_address $dst_address $protocol $match_opt $action_opt
+    $IPTABLES --table $table --append $1 $in_iface $out_iface $src_address $dst_address $protocol_opt $match_opt $action_opt
     local r=$?
     if [[ $r -ne 0 ]]; then
       _error 'An error appear during the last command'
@@ -417,20 +416,48 @@ function _load_filter_rules() {
 function _protocol() {
   _debug "  reading protocol entry : $1"
   
-  # PARTIAL PORT (dst only) matching
-  if [[ "$1" =~ ^(tcp|udp)${C_SEP}${E_REG_RANGE}$ ]]; then
-    _debug "    => proto+port : $c"
-    protocol='--protocol '$(expr match "$1" '\(tcp\|udp\):.*')
-    local port=$(expr match "$1" ".*:$REG_RANGE")
-    protocol="$protocol --destination-port ${port//-/:}"
+  # TCP matching
+  if [[ "$1" =~ ^tcp(${C_SEP}${E_REG_RANGE}(${C_SEP}${E_REG_RANGE})?)?$ ]]; then
+    _debug "    => proto tcp : $1"
+    local src_port=$(expr match "$1" "tcp${C_SEP}${REG_RANGE}")
+    local dst_port=$(expr match "$1" "tcp${C_SEP}.+${C_SEP}${REG_RANGE}")
+    # full port matching (source and destination)
+    if [[ -n $src_port && -n $dst_port ]]; then
+      src_port="--source-port ${src_port//-/:}"
+      dst_port="--destination-port ${dst_port//-/:}"
+    # partial port matching (only destination)
+    elif [[ -n $src_port ]]; then
+      dst_port="--destination-port ${src_port//-/:}"
+      src_port=
+    fi
+    
+    protocol="--protocol tcp $src_port $dst_port"
     return 0
-  # FULL PORT (dst+src) matching
-  elif [[ "$c" =~ ^(tcp|udp)${C_SEP}${E_REG_RANGE}${C_SEP}${E_REG_RANGE}$ ]]; then
-    _debug "    => proto+port+port : $c"
-    protocol='--protocol '$(expr match "$1" '\(tcp\|udp\):.*')
-    local src_port=$(expr match "$1" ".*:$REG_RANGE:.*")
-    local dst_port=$(expr match "$1" ".*:.*:$REG_RANGE")
-    protocol="$protocol --source-port ${src_port//-/:} --destination-port ${dst_port//-/:}"
+  # UDP matching
+  elif [[ "$1" =~ ^udp(${C_SEP}${E_REG_RANGE}(${C_SEP}${E_REG_RANGE})?)?$ ]]; then
+    _debug "    => proto udp : $1"
+    local src_port=$(expr match "$1" "udp${C_SEP}${REG_RANGE}")
+    local dst_port=$(expr match "$1" "udp${C_SEP}.+${C_SEP}${REG_RANGE}")
+    # full port matching (source and destination)
+    if [[ -n $src_port && -n $dst_port ]]; then
+      src_port="--source-port ${src_port//-/:}"
+      dst_port="--destination-port ${dst_port//-/:}"
+    # partial port matching (only destination)
+    elif [[ -n $src_port ]]; then
+      dst_port="--destination-port ${src_port//-/:}"
+      src_port=
+    fi
+  
+    protocol="--protocol udp $src_port $dst_port"
+    return 0
+  # ICMP matching
+  elif [[ "$1" =~ ^icmp(${C_SEP}[-a-zA-Z0-9/]+)?$ ]]; then
+    _debug "    => proto icmp : $1"
+    local type=$(expr match "$1" ".*${C_SEP}\([-a-zA-Z0-9/]\+\)")
+    if [[ -n $type ]]; then
+      type="--icmp-type $type"
+    fi
+    protocol="--protocol icmp $type"
     return 0
   fi
 
@@ -445,9 +472,13 @@ function _protocol() {
 function _match() {
   _debug "  reading matching entry : $1"
 
-  if [[ "$1" =~ ^(c|comment)${C_SEP}[a-zA-Z0-9]+$ ]]; then
+  if [[ "$1" =~ ^state${C_SEP}${E_REG_STATE}(,${E_REG_STATE})*+$ ]]; then
+    _debug "    => match : state : $1"
+    match='-m state --state '$(expr match "$1" "state:\($REG_STATE\(,$REG_STATE\)*\)")
+    return 0
+  elif [[ "$1" =~ ^(c|comment)${C_SEP}[-_a-zA-Z0-9]+$ ]]; then
     _debug "    => match : comment : $1"
-    match='-m comment --comment "'$(expr match "$1" '.*:\([a-zA-Z0-9]\+\)')'"'
+    match='-m comment --comment "'$(expr match "$1" '.*:\([-_a-zA-Z0-9]\+\)')'"'
     return 0
   fi
 
@@ -461,8 +492,10 @@ function _match() {
 #                1 if no match is performed
 function _action() {
   _debug "  reading action entry : $1"
-
-  if [[ "$1" =~ ^(j|jump)${C_SEP}REJECT(${C_SEP}[-a-zA-Z]+)?$ ]]; then  
+  if [[ "$1" =~ ^(j|jump)${C_SEP}(ACCEPT|DROP|RETURN)$ ]]; then
+    action="--jump "$(expr match "$1" ".*${C_SEP}\(ACCEPT\|DROP\|RETURN\)")
+    return 0
+  elif [[ "$1" =~ ^(j|jump)${C_SEP}REJECT(${C_SEP}[-a-zA-Z]+)?$ ]]; then  
     _debug "    => action : REJECT : $1"
     code=$(expr match "$1" ".*${C_SEP}REJECT${C_SEP}\([-a-ZA-Z]\+\)")
     if [[ -n $code ]]; then
@@ -470,6 +503,9 @@ function _action() {
     fi
     action="--jump REJECT $code"
     return 0
+  elif [[ "$1" =~ ^(j|jump)${C_SEP}MASQUERADE$ && $table = 'nat' && $chain = 'POSTROUTING' ]]; then
+      action='--jump MASQUERADE'
+      return 0
   fi
 
   action=
@@ -528,12 +564,21 @@ function do_start() {
   _reset_counters
   
   # LOAD MAIN RULES
-  _load_filter_rules INPUT "$INPUT"
+  _load_rules INPUT "$INPUT"
   r=$?; if [[ $r -ne 0 ]]; then return $r; fi
-  _load_filter_rules FORWARD "$FORWARD"
+  _load_rules OUTPUT "$OUTPUT"
   r=$?; if [[ $r -ne 0 ]]; then return $r; fi
-  _load_filter_rules OUTPUT "$OUTPUT"
-  r=$?; if [[ $r -ne 0 ]]; then return $r; fi
+  
+  if _isTrue $IS_ROUTER; then
+    _load_rules PREROUTING "$PREROUTING" nat
+    r=$?; if [[ $r -ne 0 ]]; then return $r; fi
+    
+    _load_rules FORWARD "$FORWARD"
+    r=$?; if [[ $r -ne 0 ]]; then return $r; fi
+    
+    _load_rules POSTROUTING "$POSTROUTING" nat
+    r=$?; if [[ $r -ne 0 ]]; then return $r; fi
+  fi
   
   _run_command "$COMMANDS"
   r=$?; if [[ $r -ne 0 ]]; then return $r; fi
