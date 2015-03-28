@@ -54,8 +54,8 @@ IS_VERBOSE=0
 # Don't touch unless you know what you are doing
 # all regex whose begin with E_ prefix are wrote in extended regex language
 # REGEX that describe a IFACE name
-REG_IFACE='\([a-zA-Z*][a-zA-Z0-9*]*\)'
-E_REG_IFACE='([a-zA-Z*][a-zA-Z0-9*]*)'
+REG_IFACE='\([a-zA-Z*][a-zA-Z0-9*]*+\?\)'
+E_REG_IFACE='([a-zA-Z*][a-zA-Z0-9*]*\+?)'
 
 # REGEX that describe a network ipv4 address
 REG_IPV4='\(\(\([0-9]\|[1-9][0-9]\|1[0-9]\{2\}\|2[0-4][0-9]\|25[0-5]\).\)\{3\}\([0-9]\|[1-9][0-9]\|1[0-9]\{2\}\|2[0-4][0-9]\|25[0-5]\)\(/\([0-9]\|[12][0-9]\|3[0-2]\)\)\?\)'
@@ -69,12 +69,8 @@ E_REG_PORT='([0-9]{1,4}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-
 REG_RANGE="\(${REG_PORT}\(-${REG_PORT}\)\?\)"
 E_REG_RANGE="(${E_REG_PORT}(-${E_REG_PORT})?)"
 
-# REGEX that describe a layer 4 protocol
-REG_PROTO='\(tcp\|udp\)'
-E_REG_PROTO='(tcp|udp)'
-
 # REGEX that describe the source addr
-REG_SRC='\(s\|src\)'
+REG_SRC=''
 E_REG_SRC='(s|src)'
 
 # REGEX that describe the destination addr
@@ -116,12 +112,19 @@ Options :
   
 Return code :
   0     Success
+  1-98  Reserved for iptables error code
   99    Unknown error
+  100   Error input rules with a output interface
+  101   Error output rules with a input interface
+  102   Single interface in a forward rule
+  105   Incorrect character in configuration file
   200   Need to be root
   201   Bad system arguments
   202   Missing COMMAND in shell args
   203   Missing a system needed program
-  204   Missing restore file
+  204   Unable to load configuration file
+  205   Missing restore fileecho
+  206   'test' command fail
 "
 }
 
@@ -159,38 +162,9 @@ function _isRunAsRoot() {
 
 
 #========== PROGRAM FUNCTIONS ==========#
-
-## PARSING CONFIG
-# Retrieve the procotol string from a input string
-# @param[string] : the input string
-function parseProtocol() {
-  expr match "$1" "$REG_PROTO:.*"
-}
-
-# Retrieve the source port (range) when this is the only parameter given
-# @param[string] : the input string
-function parsePortDstOnly() {
-  str=$(expr match "$1" ".*:$REG_RANGE")
-  echo -n ${str//-/:}
-}
-
-# Retrieve the source port (range) string from a input string
-# @param[string] : the input string
-function parsePortSrc() {
-  str=$(expr match "$1" ".*:$REG_RANGE:.*")
-  echo -n ${str//-/:}
-}
-
-# Retrieve the destination port (range) string from a input string
-# @param[string] : the input string
-function parsePortDst() {
-  str=$(expr match "$1" ".*:.*:$REG_RANGE")
-  echo -n ${str//-/:}
-}
-
 # Retrieve the ipv4 address from a input string
 # @param[string] : the input string
-function parseAddress() {
+function parseAddress4() {
   expr match "$1" ".*:$REG_IPV4"
 }
 
@@ -206,9 +180,19 @@ function parseIfaceOutput() {
   expr match "$1" ".*:$REG_IFACE"
 }
 
+# Get all connected network as a string
+# @return[int] : 0 if success
+#                203 if the ip command doesn't exists
+function getLinkedNetwork() {
+  IP=$(which ip 2>/dev/null)
+  if [[ -z "${IP}" ]]; then
+    return 203
+  fi
+}
+
 
 ### ---
-### RULES MGMT
+### TABLES MGMT
 ### ---
 # Remove all rules in all chains
 function _flush_rules() {
@@ -229,19 +213,19 @@ function _reset_counters() {
   $IPTABLES --table mangle --zero
 }
 
-
 ### ---
 ### GLOBAL POLICIES
 ### ---
 # Set policy to open, no security
 # @param[string] : the policy type in 'accept', 'drop'
 function _policy {
-  if [ "$1" = 'accept' ]; then
+  if [[ "$1" = 'accept' ]]; then
+    _debug 'setting policy to accept'
     # FILTER
     $IPTABLES --table filter --policy INPUT ACCEPT
     $IPTABLES --table filter --policy OUTPUT ACCEPT
 
-    if [ $IF_IPV4_FORWARD -eq 1 ]; then
+    if [[ 1 -eq 1 ]]; then
       $IPTABLES --table filter -P FORWARD ACCEPT
     else
       $IPTABLES --table filter -P FORWARD DROP
@@ -252,12 +236,15 @@ function _policy {
     $IPTABLES --table nat --policy OUTPUT ACCEPT
     $IPTABLES --table nat --policy INPUT ACCEPT
     $IPTABLES --table nat --policy POSTROUTING ACCEPT
-  elif [ "$1" = 'drop' ]; then
+  elif [[ "$1" = 'drop' ]]; then
+    _debug 'setting policy to drop'
     # FILTER
     $IPTABLES --table filter --policy INPUT DROP
     $IPTABLES --table filter --policy OUTPUT DROP
 
     $IPTABLES --table filter --policy FORWARD DROP
+  else
+    _error 'Undefined global policy'
   fi
 }
 
@@ -274,11 +261,18 @@ function _policy {
 #                101 if an output rule is declare with a input interface
 #                102 if a single interface is given for FORWARD table
 #                103 if the table name is not in INPUT, OUTPUT, FORWARD
+#                105 a incorrect character have been found in given list of command
 function _load_filter_rules() {
   # bad table name
-  if [[ ! $1 =~ ^(INPUT|OUTPUT|FORWARD)$ ]]; then
+  if [[ ! "$1" =~ ^(INPUT|OUTPUT|FORWARD)$ ]]; then
+    _error 'The selected table is incorrect'
     return 103
   fi
+  if [[ "$2" =~ \; ]]; then
+    _error 'An forbidden character is found'
+    return 105
+  fi
+  _debug "# entering _load_filter_rules : $1"
   # Loop for each rule (separated by space)
   for entry in $2; do
     _debug "reading config entry : $entry"
@@ -287,47 +281,20 @@ function _load_filter_rules() {
       _debug "  => comment : $entry"
       continue
     fi
-    local protocol=
-    local src_port=
-    local dst_port=
     local src_address=
     local dst_address=
     local in_iface=
     local out_iface=
+    local protocol_opt=
     local match_opt=
     # Loop for each command (separated by F_SEP, pipe as default)
     for c in ${entry//${F_SEP}/ }; do
       local match=
-      # PARTIAL PORT (dst only) matching
-      if [[ "$c" =~ ^${E_REG_PROTO}${C_SEP}${E_REG_RANGE}$ ]]; then
-        _debug "  => proto+port : $c"
-        protocol=$(parseProtocol "$c")
-        if [[ -n $protocol ]]; then
-          protocol="--protocol $protocol"
-        fi
-        dst_port=$(parsePortDstOnly "$c")
-        if [[ -n $dst_port ]]; then
-          dst_port="--destination-port $dst_port"
-        fi
-      # FULL PORT (dst+src) matching
-      elif [[ "$c" =~ ^${E_REG_PROTO}${C_SEP}${E_REG_RANGE}${C_SEP}${E_REG_RANGE}$ ]]; then
-        _debug "  => proto+port+port : $c"
-        protocol=$(parseProtocol "$c")
-        if [[ -n $protocol ]]; then
-          protocol="--protocol $protocol"
-        fi
-        src_port=$(parsePortSrc "$c")
-        if [[ -n $src_port ]]; then
-          src_port="--source-port $src_port"
-        fi
-        dst_port=$(parsePortDst "$c")
-        if [[ -n $dst_port ]]; then
-          dst_port="--destination-port $dst_port"
-        fi
+      local protocol=
       # SOURCE ADDRESS matching
-      elif [[ "$c" =~ ^${E_REG_SRC}${C_SEP}${E_REG_IPV4}$ ]]; then
+      if [[ "$c" =~ ^${E_REG_SRC}${C_SEP}${E_REG_IPV4}$ ]]; then
         _debug "  => src addr : $c"
-        src_address=$(parseAddress "$c")
+        src_address=$(parseAddress4 "$c")
         if [[ -n $src_address && $src_address != '*' ]]; then
           src_address="--source $src_address"
         else
@@ -336,12 +303,16 @@ function _load_filter_rules() {
       # DESTINATION ADDRESS matching
       elif [[ "$c" =~ ^${E_REG_DST}${C_SEP}${E_REG_IPV4}$ ]]; then
         _debug "  => dst addr : $c"
-        dst_address=$(parseAddress "$c")
+        dst_address=$(parseAddress4 "$c")
         if [[ -n $dst_address && $dst_address != '*' ]]; then
           dst_address="--destination $dst_address"
         else
           dst_address=
         fi
+      # PROTOCOL matching
+      elif _protocol "$c"; then
+        _protocol "$c" 'true'
+        protocol_opt="$protocol_opt $protocol"
       # MATCH matching
       elif _match "$c"; then
         _match "$c" 'true'
@@ -400,20 +371,57 @@ function _load_filter_rules() {
         _error "error reading line : $entry"
       fi
     done
-    _echo --table filter --append $1 $in_iface $out_iface $src_address $dst_address $protocol $src_port $dst_port $match_opt
-    $IPTABLES --table filter --append $1 $in_iface $out_iface $src_address $dst_address $protocol $src_port $dst_port $match_opt
+    _echo --table filter --append $1 $in_iface $out_iface $src_address $dst_address $protocol $match_opt
+    $IPTABLES --table filter --append $1 $in_iface $out_iface $src_address $dst_address $protocol $match_opt
     result=$?
     if [[ $result -ne 0 ]]; then
+      _error 'An error appear during the last command'
       return $result
     fi
   done
   return 0
 }
 
-# Parse matching rules
+# Parse protocol rules
 # @param[string] : the input string in which search for matching rules
 # @param[boolean] OPTIONNAL : define if the function must parse and return the match string (default false)
-# @return[int] : 0 if a match success and the match command is returned as an echo return
+# @return[int] : 0 if a match success and the match command is returned in 'match' shell variable
+#                1 if no match is performed
+function _protocol() {
+  if [[ $2 =~ ^true$ ]]; then
+    local parse=1
+    _debug "  reading protocol entry : $1"
+  else
+    local parse=0
+  fi
+  # PARTIAL PORT (dst only) matching
+  if [[ "$1" =~ ^(tcp|udp)${C_SEP}${E_REG_RANGE}$ ]]; then
+    if [[ $parse -eq 1 ]]; then
+      _debug "    => proto+port : $c"
+      protocol='--protocol '$(expr match "$1" '\(tcp\|udp\):.*')
+      local port=$(expr match "$1" ".*:$REG_RANGE")
+      protocol="$protocol --destination-port "${port//-/:}
+    fi
+    return 0
+  # FULL PORT (dst+src) matching
+  elif [[ "$c" =~ ^(tcp|udp)${C_SEP}${E_REG_RANGE}${C_SEP}${E_REG_RANGE}$ ]]; then
+    if [[ $parse -eq 1 ]]; then
+      _debug "    => proto+port+port : $c"
+      protocol='--protocol '$(expr match "$1" '\(tcp\|udp\):.*')
+      local src_port=$(expr match "$1" ".*:$REG_RANGE:.*")
+      local dst_port=$(expr match "$1" ".*:.*:$REG_RANGE")
+      protocol="$protocol --source-port ${src_port//-/:} --destination-port ${dst_port//-/:}"
+    fi
+    return 0
+  fi
+  protocol=
+  return 1
+}
+
+# Parse match rules
+# @param[string] : the input string in which search for matching rules
+# @param[boolean] OPTIONNAL : define if the function must parse and return the match string (default false)
+# @return[int] : 0 if a match success and the match command is returned in 'match' shell variable
 #                1 if no match is performed
 function _match() {
   if [[ $2 =~ ^true$ ]]; then
@@ -425,16 +433,48 @@ function _match() {
   if [[ "$1" =~ ^(c|comment)${C_SEP}[a-zA-Z0-9]+$ ]]; then
     if [[ $parse -eq 1 ]]; then
       _debug "    => match : comment : $1"
-      match='-m comment --comment "'$(expr match "$1" 'c:\([a-zA-Z0-9]\+\)')'"'
+      match='-m comment --comment "'$(expr match "$1" '.*:\([a-zA-Z0-9]\+\)')'"'
     fi
     return 0
-  fi  
-    
+  fi
+
   match=
   return 1
 }
 
-
+### ---
+### IPTABLES COMMAND
+### ---
+# This function run specific user defined iptables command to handle iptables option whose are not handled by this script
+# @param[string] : the full command string which contains one command by line
+# @return[int] : 0 if success
+#                105 a incorrect character have been found in given list of command
+function _run_command() {
+  if [[ "$1" =~ \; ]]; then
+    _error 'An forbidden character is found'
+    return 105
+  fi
+  _debug "# entering _run_command"
+  # save the old field separator
+  local old_ifs=$IFS
+  # set the internal field separator to newline only
+  IFS=$'\n'
+  for cmd in $1; do
+    # if a sharp is found drop this line, it's a comment line
+    if [[ ${cmd:0:1} = "#" ]]; then
+      _debug "  => comment : $cmd"
+      continue
+    fi
+    _echo $cmd
+    $IPTABLES $cmd
+    if [[ $result -ne 0 ]]; then
+      _error 'An error appear during the last command'
+      return $result
+    fi
+  done
+  # reset the internal field separator for for loop
+  IFS=$old_ifs
+}
 
 
 
@@ -447,43 +487,153 @@ function _load_anti_ddos_rules() {
 
 
 
+############################
+# Start the Firewall rules #
+############################
+# Start function, it setup all firewall rules according to configuration
+# @return[int] : 0 if rules have been correctly set
+#                X other error codes
+function do_start() {
+  local r
+  _policy 'drop'
+  _flush_rules
+  _flush_chains
+  _reset_counters
+  
+  # LOAD MAIN RULES
+  _load_filter_rules INPUT "$INPUT"
+  r=$?; if [[ $r -ne 0 ]]; then return $r; fi
+  _load_filter_rules FORWARD "$FORWARD"
+  r=$?; if [[ $r -ne 0 ]]; then return $r; fi
+  _load_filter_rules OUTPUT "$OUTPUT"
+  r=$?; if [[ $r -ne 0 ]]; then return $r; fi
+  
+  _run_command "$COMMAND"
+  r=$?; if [[ $r -ne 0 ]]; then return $r; fi
+}
+
+###########################
+# Stop the Firewall rules #
+###########################
+# Remove all rules of the firewall, turn it open policy
+# @return[int] : 0 if rules have been correctly remove
+#               X other error codes
+function do_stop() {
+  _policy 'accept'
+  _flush_rules
+  _flush_chains
+  _reset_counters
+}
+
+##########################
+# Restart the Firewall rules
+##########################
+
+# Restart all rules of the firewall
+# return :	0 if rules have been correctly remove
+function do_restart() {
+  do_stop
+  r=$?
+  if [[ $r -ne 0 ]]; then
+    _error "Failed to stop the firewall."
+    return $r
+  fi
+  # stop success, now run start
+  do_start
+  r=$?
+  if [[ $r -ne 0 ]]; then
+    _error "Failed to start the firewall."
+    return $r
+  fi
+}
 
 
-
-
-
-
+#########################
+# Rules storage section #
+#########################
 # Save all firewall rules in a save file
-# return[int] : x	the save command return status
-#			100 if save command is not found
+# @param[int] OPTIONNAL : the path of the file in which to save rules
+# @return[int] : x	the save command return status
+#			203 if save command is not found
 function do_save() {
+  local file="$1"
+  
+  if [[ -z "$file" ]]; then
+    file=${IPTABLES_BACKUP_FILE}
+  fi
   IPTABLES_SAVE=$(which iptables-save 2>/dev/null)
   if [[ -z "${IPTABLES_SAVE}" ]]; then
-    return 100
+    return 203
   fi
-  ${IPTABLES_SAVE} > ${IPTABLES_BACKUP_FILE}
+  ${IPTABLES_SAVE} > ${file}
 }
 
 # Restore all firewall rules from a file
 # return :	x	the restore command return status
-#			100 if restore command is not found
-#			101 restore file is not found
+#			203 if restore command is not found
+#			204 restore file is not found
 function do_restore() {
   IPTABLES_RESTORE=$(which iptables-restore 2>/dev/null)
   if [[ -z "${IPTABLES_RESTORE}" ]]; then
-    return 100
+    return 203
   fi
   if [[ -r "${IPTABLES_BACKUP_FILE}" ]]; then
     ${IPTABLES_RESTORE} < ${IPTABLES_BACKUP_FILE}
-    return 101
+    return 204
   fi
 }
 
+
+###########################
+# Test the Firewall rules #
+###########################
+# Apply new firewall rules and wait for an user confirmation before saving them
+# return :	0 if rules have been correctly set
+#			      X other error codes 
+function do_test() {
+  local r
+  local input
+  
+  echo 'Saving current firewall rules'
+  do_save
+  r$=?
+  if [[ $r -ne 0 ]]; then
+    _error 'Unable to save current rules'
+    return $r
+  fi
+
+  echo 'WARNING : Be careful that the caracters are put to screen after you typed them to ensure a bi-directionnal communication'
+  echo "WARNING : Previous configuration will be restore in ${TIMEOUT_FOR_TEST} seconds if no action is performed. Type 'OK' apply new rules [wait for ${TIMEOUT_FOR_TEST}s]"
+  echo 'Testing and applying new rules'
+  do_restart
+
+  read -t "${TIMEOUT_FOR_TEST}" -n 2 input
+  if [[ "$input" =~ ^(o|O)(k|K)$ ]]; then 
+    echo 'Saving new rules'
+  else
+    local debug_file="/tmp/iptables_$(date +%Y-%m-%d_%H-%M)"
+    do_save "$debug_file"
+    echo 'WARNING : A snapshot of the new firewall rules have been save to $debug_file'
+    do_restore
+    r$=?
+    if [[ $r -ne 0 ]]; then
+      _error 'Unable to restore current rules'
+      return $r
+    fi
+    
+    _error 'Old rules have been restored'
+    return 206
+  fi
+}
+
+
 #========== MAIN FUNCTION ==========#
 # Main
-# param	:same of the script
-# return	:
+# @param[] : same of the script
+# @return[int] : X the exit code of the script
 function main() {
+  local r
+  
   _isRunAsRoot
   
   ### ARGUMENTS PARSING  
@@ -495,7 +645,7 @@ function main() {
     -*) _error "invalid option -- '$1'"
         exit 201;;
     *)  if [[ $# -ge 1 ]]; then # GOT NEEDED ARGUMENTS
-          COMMAND=$1
+          main_command=$1
           break #stop reading arguments
         else 
           _error 'missing command'
@@ -512,33 +662,37 @@ function main() {
     shift
   done
 
-  case "$COMMAND" in
+  case "$main_command" in
   start)
     _echo "Setting firewall rules. Enable firewall secure policy"
     do_start
-    case $? in
-    0|1) _echo "Success";;
-    *) _error "Failed to start the firewall.";;
+    r=$?
+    case $r in
+    0) _echo "=> Success";;
+    *) _error "Failed to start the firewall."
+      # flush rules after error during start
+      do_stop
+      exit $r
+      ;;
     esac
     ;;
   stop)
     _echo "Removing firewall rules. Turn firewall to open policy"
     do_stop
-    case $? in
-    0|1) _echo "=> Success";;
-    *) _error "Failed to stop the firewall.";;
+    r=$?
+    case $r in
+    0) _echo "=> Success";;
+    *) _error "Failed to stop the firewall."; exit $r;;
     esac
     ;;
   restart)
     _echo "Re-setting firewall rules"
     do_restart
-    case $? in
+    r=$?
+    case $r in
     # restart success
-    0|1) _echo "=> Success";;
-    # start failed
-    2) _error "Failed to start the firewall.";;
-    # stop failed
-    3) _error "Failed to stop the firewall.";;
+    0) _echo "=> Success";;
+    *) _error "Failed to restart the firewall."; exit $r;;
     esac
     ;;
   list)
@@ -550,42 +704,29 @@ function main() {
   restore)
     _echo "Loading firewall rules from ${IPTABLES_BACKUP_FILE}"
     do_restore
-    case "$?" in
+    r=$?
+    case "$r" in
     0) _echo "=> Success";;
-    100)
-      _echo "=> Failure"
-      _error "Restore command not found"
-      exit 203
-      ;;
-    101)
-      _echo "=> Failure"
-      _error "Restore file not found"
-      exit 204
-      ;;
-    *) 
-      _echo "=> Failure"
-      exit 99
-      ;;
+    *) _echo "=> Failure"; exit $r;;
     esac
     ;;
   save)
     _echo "Saving firewall rules into ${IPTABLES_BACKUP_FILE}"
     do_save
-    case "$?" in
+    r=$?
+    case "$r" in
     0) _echo "=> Success";;
-    100)
-      _echo "=> Failure"
-      _error "Save command not found"
-      exit 203
-      ;;
-    *) _echo "=> Failure"
-      exit 99
-      ;;
+    *) _echo "=> Failure"; exit $r;;
     esac
     ;;
   test)
     _echo "Testing new firewall rulesets"
     do_test
+    r=$?
+    case "$r" in
+    0) _echo "=> Success";;
+    *) _echo "=> Failure"; exit $r;;
+    esac
     ;;
   help)
     _usage
@@ -604,20 +745,16 @@ function main() {
 # Exit if the iptables command is not available
 if [[ ! -x "$IPTABLES" ]]; then
   _error "The iptables command is the path or not installed"
-   #exit 1
+   #exit 203
 fi
 
 # Exit if the config have not been sourced
 if [[ -z "$IF_CONFIG_SOURCED" ]]; then
   _error "The configuration file have not been source or is not readable"
-  #exit 2
+  exit 204
 fi
 
-IS_VERBOSE=1
-_load_filter_rules INPUT "$INPUT"
-#_load_filter_rules FORWARD "$FORWARD"
-#_load_filter_rules OUTPUT "$OUTPUT"
-#main "$@"
+main "$@"
 
 
 
@@ -637,46 +774,6 @@ _load_filter_rules INPUT "$INPUT"
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-### ---
-### PACKETS
-### ---
-# Set specific rules which concerns packet
-function _set_packet_rules() {
-  # Drop broadcast paquets
-  $IPTABLES -A INPUT -m pkttype --pkt-type broadcast -j DROP
-}
-
-
-
-### ---
-### INTERFACE
-### ---
-function _allow_loopback_interface() {
-# Allow loopback interface
-  $IPTABLES -t filter -A INPUT -i lo --source ${NETWORK_LOOPBACK} --destination ${NETWORK_LOOPBACK} -j ACCEPT
-  $IPTABLES -t filter -A OUTPUT -o lo --source ${NETWORK_LOOPBACK} --destination ${NETWORK_LOOPBACK} -j ACCEPT
-}
 
 
 
