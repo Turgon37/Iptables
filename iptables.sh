@@ -365,7 +365,7 @@ function _load_rules() {
         
         # input interface
         in_iface=$(parseIface "$c")
-        if [[ -n $in_iface ]]; then
+        if [[ -n $in_iface && $in_iface != '*' ]]; then
           # error during output rule with an input interface
           if [[ $1 =~ OUTPUT|POSTROUTING ]]; then
             _error "input interface in $chain chain '$entry'"
