@@ -509,10 +509,27 @@ function _run_command() {
   IFS=$DEFAULT_IFS
 }
 
-
-
-
-
+###########################
+# Restart running process #
+###########################
+# Check process status and restart it if it is running
+# @param[String] : list of process to restart
+function restart_process() {
+  for process in $1; do
+    # Check process status
+    /etc/init.d/$process status 2>/dev/null 1>&2
+    if [ $? -eq 0 ]; then
+      # Restart the process if it is running
+      service $process restart 2>/dev/null 1>&2
+      if [ $? -eq 1 ]; then
+        # Return error if the process can't be restarted
+        _error "Process $process hasn't been restarted."
+        continue
+      fi
+      echo "$process has been restarted."
+    fi
+  done
+}
 
 ############################
 # Start the Firewall rules #
