@@ -26,56 +26,67 @@
 # version 2.2 : 2014-10-26
 #    +add a new configuration file /etc/default/iptables
 #    +set routing rules by a loop for configuration file
-# version 3.0 : 2015-03-25
+# version 3.0 : 2015-03-28
 #    +refunding main loop and core processing, full dynamic loading
 #
-VERSION='3.0'
+readonly VERSION='3.0'
 #==============================================================================
+INPUT=
+OUTPUT=
+FORWARD=
+COMMANDS=
+DEFAULT_ACTION=ACCEPT
+TIMEOUT_FOR_TEST=9
+
 
 #========== INTERNAL OPTIONS ==========#
-IPTABLES="dump"
-IP6TABLES=$(which ip6tables 2>/dev/null 1>&2)
+readonly IPTABLES="echo"
+#readonly IPTABLES=$(which iptables 2>/dev/null)
+readonly IP6TABLES=$(which ip6tables 2>/dev/null)
 #IPTABLES_CONFIG=/etc/default/iptables
-IPTABLES_CONFIG=./config
+readonly IPTABLES_CONFIG=./config
 
-IPTABLES_BACKUP_FILE=/etc/iptables.backup
+readonly IPTABLES_BACKUP_FILE=/etc/iptables.backup
 
-# The field separator caracter
-F_SEP='|'
 # The key => config separator
-C_SEP=':'
+readonly C_SEP=':'
 
 
 #========== INTERNAL VARIABLES ==========#
 IS_DEBUG=0
 IS_VERBOSE=0
 
+readonly DEFAULT_IFS=$IFS
 ## WORKING REGEX
 # Don't touch unless you know what you are doing
 # all regex whose begin with E_ prefix are wrote in extended regex language
+# REGEX that describe a string thaht must not be present in all configuration string, this regexp must be an only | characters alternatives
+readonly E_REG_FORBID='(\;)'
+
 # REGEX that describe a IFACE name
-REG_IFACE='\([a-zA-Z*][a-zA-Z0-9*]*+\?\)'
-E_REG_IFACE='([a-zA-Z*][a-zA-Z0-9*]*\+?)'
+readonly REG_IFACE='\([a-zA-Z*][a-zA-Z0-9*]*+\?\)'
+readonly E_REG_IFACE='([a-zA-Z*][a-zA-Z0-9*]*\+?)'
 
 # REGEX that describe a network ipv4 address
-REG_IPV4='\(\(\([0-9]\|[1-9][0-9]\|1[0-9]\{2\}\|2[0-4][0-9]\|25[0-5]\).\)\{3\}\([0-9]\|[1-9][0-9]\|1[0-9]\{2\}\|2[0-4][0-9]\|25[0-5]\)\(/\([0-9]\|[12][0-9]\|3[0-2]\)\)\?\)'
-E_REG_IPV4='((([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5]).){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])(/([0-9]|[12][0-9]|3[0-2]))?)'
+readonly REG_IPV4='\(\(\([0-9]\|[1-9][0-9]\|1[0-9]\{2\}\|2[0-4][0-9]\|25[0-5]\).\)\{3\}\([0-9]\|[1-9][0-9]\|1[0-9]\{2\}\|2[0-4][0-9]\|25[0-5]\)\(/\([0-9]\|[12][0-9]\|3[0-2]\)\)\?\)'
+readonly E_REG_IPV4='((([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5]).){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])(\/([0-9]|[12][0-9]|3[0-2]))?)'
 
 # REGEX that describe a port number (between 1 and 65535)
-REG_PORT='\([0-9]\{1,4\}\|[1-5][0-9]\{4\}\|6[0-4][0-9]\{3\}\|65[0-4][0-9]\{2\}\|655[0-2][0-9]\|6553[0-5]\)'
-E_REG_PORT='([0-9]{1,4}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5])'
+readonly REG_PORT='\([0-9]\{1,4\}\|[1-5][0-9]\{4\}\|6[0-4][0-9]\{3\}\|65[0-4][0-9]\{2\}\|655[0-2][0-9]\|6553[0-5]\)'
+readonly E_REG_PORT='([0-9]{1,4}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5])'
 
 # REGEX that describe a port range like PORT-PORT (use this for port matching)
-REG_RANGE="\(${REG_PORT}\(-${REG_PORT}\)\?\)"
-E_REG_RANGE="(${E_REG_PORT}(-${E_REG_PORT})?)"
+readonly REG_RANGE="\(${REG_PORT}\(-${REG_PORT}\)\?\)"
+readonly E_REG_RANGE="(${E_REG_PORT}(-${E_REG_PORT})?)"
 
 # REGEX that describe the source addr
-REG_SRC=''
-E_REG_SRC='(s|src)'
+readonly E_REG_SRC='(s|src)'
 
 # REGEX that describe the destination addr
-REG_DST='\(d\|dst\)'
-E_REG_DST='(d|dst)'
+readonly E_REG_DST='(d|dst)'
+
+# REGEX that wualify a network which has a gateway
+readonly E_REG_GW="(${C_SEP}gw)"
 
 
 #========== INTERNAL FUNCTIONS ==========#
@@ -118,13 +129,15 @@ Return code :
   101   Error output rules with a input interface
   102   Single interface in a forward rule
   105   Incorrect character in configuration file
+  106   Incorrect numeric value for a variable
+  107   Incorrect string value for a variable
   200   Need to be root
   201   Bad system arguments
   202   Missing COMMAND in shell args
   203   Missing a system needed program
   204   Unable to load configuration file
   205   Missing restore fileecho
-  206   'test' command fail
+  206   'test' command fail, new rules cause a break of connection
 "
 }
 
@@ -154,40 +167,35 @@ function _debug() {
 
 # Check if the script is run by root or not. If not, prompt error and exit
 function _isRunAsRoot() {
-  if [[ "$(id -u)" != "0" ]]; then
+  if [[ "$UID" != "0" ]]; then
     _error "This script must be run as root."
     exit 200
   fi
 }
 
+# Check if an option is set to a 'true' value or not
+# @param[string] : value to check
+# @return[int] : 0 if value is consider as true
+#                1 if not
+function _isTrue() {
+  [[ "$1" =~ ^(true|TRUE|True|1)$ ]]
+}
 
 #========== PROGRAM FUNCTIONS ==========#
 # Retrieve the ipv4 address from a input string
 # @param[string] : the input string
+# @param[string] OPTIONNAL : the REGEX prefix
+# @param[string] OPTIONNAL : the REGEX suffix
 function parseAddress4() {
-  expr match "$1" ".*:$REG_IPV4"
+  expr match "$1" "${2}${REG_IPV4}${3}"
 }
 
-# Retrieve the input iface name string from a input string
+# Retrieve the iface name string from a input string
 # @param[string] : the input string
-function parseIfaceInput() {
-  expr match "$1" "$REG_IFACE"
-}
-
-# Retrieve the output iface name string from a input string
-# @param[string] : the input string
-function parseIfaceOutput() {
-  expr match "$1" ".*:$REG_IFACE"
-}
-
-# Get all connected network as a string
-# @return[int] : 0 if success
-#                203 if the ip command doesn't exists
-function getLinkedNetwork() {
-  IP=$(which ip 2>/dev/null)
-  if [[ -z "${IP}" ]]; then
-    return 203
-  fi
+# @param[string] OPTIONNAL : the REGEX prefix
+# @param[string] OPTIONNAL : the REGEX suffix
+function parseIface() {
+  expr match "$1" "${2}${REG_IFACE}${3}"
 }
 
 
@@ -212,6 +220,7 @@ function _reset_counters() {
   $IPTABLES --table nat --zero
   $IPTABLES --table mangle --zero
 }
+
 
 ### ---
 ### GLOBAL POLICIES
@@ -248,6 +257,14 @@ function _policy {
   fi
 }
 
+
+
+function _load_anti_ddos_rules() {
+  $IPTABLES --table filter --new-chain DDOS_PROTECT
+  
+}
+
+
 ### ---
 ### GLOBAL RULES LOADING
 ### ---
@@ -268,11 +285,13 @@ function _load_filter_rules() {
     _error 'The selected table is incorrect'
     return 103
   fi
-  if [[ "$2" =~ \; ]]; then
+  if [[ "$2" =~ $E_REG_FORBID ]]; then
     _error 'An forbidden character is found'
     return 105
   fi
   _debug "# entering _load_filter_rules : $1"
+  # set the internal field separator to newline only
+  IFS=$'\n'
   # Loop for each rule (separated by space)
   for entry in $2; do
     _debug "reading config entry : $entry"
@@ -287,14 +306,17 @@ function _load_filter_rules() {
     local out_iface=
     local protocol_opt=
     local match_opt=
+    local action_opt=
+    IFS=$DEFAULT_IFS
     # Loop for each command (separated by F_SEP, pipe as default)
-    for c in ${entry//${F_SEP}/ }; do
+    for c in $entry; do
       local match=
       local protocol=
+      local action=
       # SOURCE ADDRESS matching
       if [[ "$c" =~ ^${E_REG_SRC}${C_SEP}${E_REG_IPV4}$ ]]; then
         _debug "  => src addr : $c"
-        src_address=$(parseAddress4 "$c")
+        src_address=$(parseAddress4 "$c" '.*'${C_SEP})
         if [[ -n $src_address && $src_address != '*' ]]; then
           src_address="--source $src_address"
         else
@@ -303,7 +325,7 @@ function _load_filter_rules() {
       # DESTINATION ADDRESS matching
       elif [[ "$c" =~ ^${E_REG_DST}${C_SEP}${E_REG_IPV4}$ ]]; then
         _debug "  => dst addr : $c"
-        dst_address=$(parseAddress4 "$c")
+        dst_address=$(parseAddress4 "$c" '.*'${C_SEP})
         if [[ -n $dst_address && $dst_address != '*' ]]; then
           dst_address="--destination $dst_address"
         else
@@ -311,18 +333,18 @@ function _load_filter_rules() {
         fi
       # PROTOCOL matching
       elif _protocol "$c"; then
-        _protocol "$c" 'true'
         protocol_opt="$protocol_opt $protocol"
       # MATCH matching
       elif _match "$c"; then
-        _match "$c" 'true'
         match_opt="$match_opt $match"
+      # ACTION matching
+      elif _action "$c"; then
+        action_opt="$action_opt $action"
       # SINGLE INTERFACE matching
       elif [[ "$c" =~ ^${E_REG_IFACE}$ ]]; then
         _debug "  => iface : $c"
-        
         # interface
-        iface=$(parseIfaceInput "$c")
+        iface=$(parseIface "$c")
         if [[ -n $iface ]]; then
           # error during forward rule with an unique interface
           if [[ $1 = 'FORWARD' ]]; then
@@ -343,7 +365,7 @@ function _load_filter_rules() {
         _debug "  => iface+iface : $c"
         
         # input interface
-        in_iface=$(parseIfaceInput "$c")
+        in_iface=$(parseIface "$c")
         if [[ -n $in_iface ]]; then
           # error during output rule with an input interface
           if [[ $1 = 'OUTPUT' ]]; then
@@ -356,7 +378,7 @@ function _load_filter_rules() {
         fi
         
         # output interface
-        out_iface=$(parseIfaceOutput "$c")
+        out_iface=$(parseIface "$c" '.*'${C_SEP})
         if [[ -n $out_iface && $out_iface != '*' ]]; then
           # error during input rule with an output interface
           if [[ $1 = 'INPUT' ]]; then
@@ -371,74 +393,86 @@ function _load_filter_rules() {
         _error "error reading line : $entry"
       fi
     done
-    _echo --table filter --append $1 $in_iface $out_iface $src_address $dst_address $protocol $match_opt
-    $IPTABLES --table filter --append $1 $in_iface $out_iface $src_address $dst_address $protocol $match_opt
-    result=$?
-    if [[ $result -ne 0 ]]; then
-      _error 'An error appear during the last command'
-      return $result
+    # NO ACTION => default action
+    if [[ -z $action_opt ]]; then
+      action_opt="--jump $DEFAULT_ACTION"
     fi
+    $IPTABLES --table filter --append $1 $in_iface $out_iface $src_address $dst_address $protocol $match_opt $action_opt
+    local r=$?
+    if [[ $r -ne 0 ]]; then
+      _error 'An error appear during the last command'
+      return $r
+    fi
+    IFS=$'\n'
   done
+  # reset the internal field separator for 'for' loop
+  IFS=$DEFAULT_IFS
   return 0
 }
 
 # Parse protocol rules
 # @param[string] : the input string in which search for matching rules
-# @param[boolean] OPTIONNAL : define if the function must parse and return the match string (default false)
-# @return[int] : 0 if a match success and the match command is returned in 'match' shell variable
+# @return[int] : 0 if a match success and the match command is returned in 'protocol' shell variable
 #                1 if no match is performed
 function _protocol() {
-  if [[ $2 =~ ^true$ ]]; then
-    local parse=1
-    _debug "  reading protocol entry : $1"
-  else
-    local parse=0
-  fi
+  _debug "  reading protocol entry : $1"
+  
   # PARTIAL PORT (dst only) matching
   if [[ "$1" =~ ^(tcp|udp)${C_SEP}${E_REG_RANGE}$ ]]; then
-    if [[ $parse -eq 1 ]]; then
-      _debug "    => proto+port : $c"
-      protocol='--protocol '$(expr match "$1" '\(tcp\|udp\):.*')
-      local port=$(expr match "$1" ".*:$REG_RANGE")
-      protocol="$protocol --destination-port "${port//-/:}
-    fi
+    _debug "    => proto+port : $c"
+    protocol='--protocol '$(expr match "$1" '\(tcp\|udp\):.*')
+    local port=$(expr match "$1" ".*:$REG_RANGE")
+    protocol="$protocol --destination-port ${port//-/:}"
     return 0
   # FULL PORT (dst+src) matching
   elif [[ "$c" =~ ^(tcp|udp)${C_SEP}${E_REG_RANGE}${C_SEP}${E_REG_RANGE}$ ]]; then
-    if [[ $parse -eq 1 ]]; then
-      _debug "    => proto+port+port : $c"
-      protocol='--protocol '$(expr match "$1" '\(tcp\|udp\):.*')
-      local src_port=$(expr match "$1" ".*:$REG_RANGE:.*")
-      local dst_port=$(expr match "$1" ".*:.*:$REG_RANGE")
-      protocol="$protocol --source-port ${src_port//-/:} --destination-port ${dst_port//-/:}"
-    fi
+    _debug "    => proto+port+port : $c"
+    protocol='--protocol '$(expr match "$1" '\(tcp\|udp\):.*')
+    local src_port=$(expr match "$1" ".*:$REG_RANGE:.*")
+    local dst_port=$(expr match "$1" ".*:.*:$REG_RANGE")
+    protocol="$protocol --source-port ${src_port//-/:} --destination-port ${dst_port//-/:}"
     return 0
   fi
+
   protocol=
   return 1
 }
 
 # Parse match rules
 # @param[string] : the input string in which search for matching rules
-# @param[boolean] OPTIONNAL : define if the function must parse and return the match string (default false)
 # @return[int] : 0 if a match success and the match command is returned in 'match' shell variable
 #                1 if no match is performed
 function _match() {
-  if [[ $2 =~ ^true$ ]]; then
-    local parse=1
-    _debug "  reading matching entry : $1"
-  else
-    local parse=0
-  fi
+  _debug "  reading matching entry : $1"
+
   if [[ "$1" =~ ^(c|comment)${C_SEP}[a-zA-Z0-9]+$ ]]; then
-    if [[ $parse -eq 1 ]]; then
-      _debug "    => match : comment : $1"
-      match='-m comment --comment "'$(expr match "$1" '.*:\([a-zA-Z0-9]\+\)')'"'
-    fi
+    _debug "    => match : comment : $1"
+    match='-m comment --comment "'$(expr match "$1" '.*:\([a-zA-Z0-9]\+\)')'"'
     return 0
   fi
 
   match=
+  return 1
+}
+
+# Parse action
+# @param[string] : the input string in which search for matching rules
+# @return[int] : 0 if a match success and the match command is returned in action' shell variable
+#                1 if no match is performed
+function _action() {
+  _debug "  reading action entry : $1"
+
+  if [[ "$1" =~ ^(j|jump)${C_SEP}REJECT(${C_SEP}[-a-zA-Z]+)?$ ]]; then  
+    _debug "    => action : REJECT : $1"
+    code=$(expr match "$1" ".*${C_SEP}REJECT${C_SEP}\([-a-ZA-Z]\+\)")
+    if [[ -n $code ]]; then
+      code="--reject-with $code"
+    fi
+    action="--jump REJECT $code"
+    return 0
+  fi
+
+  action=
   return 1
 }
 
@@ -450,13 +484,11 @@ function _match() {
 # @return[int] : 0 if success
 #                105 a incorrect character have been found in given list of command
 function _run_command() {
-  if [[ "$1" =~ \; ]]; then
+  if [[ "$1" =~ $E_REG_FORBID ]]; then
     _error 'An forbidden character is found'
     return 105
   fi
   _debug "# entering _run_command"
-  # save the old field separator
-  local old_ifs=$IFS
   # set the internal field separator to newline only
   IFS=$'\n'
   for cmd in $1; do
@@ -465,23 +497,18 @@ function _run_command() {
       _debug "  => comment : $cmd"
       continue
     fi
-    _echo $cmd
+    IFS=$DEFAULT_IFS
     $IPTABLES $cmd
     if [[ $result -ne 0 ]]; then
       _error 'An error appear during the last command'
       return $result
     fi
+    IFS=$'\n'
   done
-  # reset the internal field separator for for loop
-  IFS=$old_ifs
+  # reset the internal field separator for 'for' loop
+  IFS=$DEFAULT_IFS
 }
 
-
-
-function _load_anti_ddos_rules() {
-  $IPTABLES --table filter --new-chain DDOS_PROTECT
-  
-}
 
 
 
@@ -508,7 +535,7 @@ function do_start() {
   _load_filter_rules OUTPUT "$OUTPUT"
   r=$?; if [[ $r -ne 0 ]]; then return $r; fi
   
-  _run_command "$COMMAND"
+  _run_command "$COMMANDS"
   r=$?; if [[ $r -ne 0 ]]; then return $r; fi
 }
 
@@ -563,6 +590,7 @@ function do_save() {
   fi
   IPTABLES_SAVE=$(which iptables-save 2>/dev/null)
   if [[ -z "${IPTABLES_SAVE}" ]]; then
+    _error 'The save command is not found'
     return 203
   fi
   ${IPTABLES_SAVE} > ${file}
@@ -575,6 +603,7 @@ function do_save() {
 function do_restore() {
   IPTABLES_RESTORE=$(which iptables-restore 2>/dev/null)
   if [[ -z "${IPTABLES_RESTORE}" ]]; then
+    _error 'The restore command is not found'
     return 203
   fi
   if [[ -r "${IPTABLES_BACKUP_FILE}" ]]; then
@@ -589,10 +618,16 @@ function do_restore() {
 ###########################
 # Apply new firewall rules and wait for an user confirmation before saving them
 # return :	0 if rules have been correctly set
+#           106 if TIMEOUT is not a integer
 #			      X other error codes 
 function do_test() {
   local r
   local input
+  
+  if [[ $TIMEOUT_FOR_TEST =~ ^[0-9]+$ ]]; then
+    _error 'Incorrect numeric value for TIMEOUT_FOR_TEST option'
+    return 106
+  fi
   
   echo 'Saving current firewall rules'
   do_save
@@ -661,7 +696,28 @@ function main() {
 
     shift
   done
+  
+  ## MAIN CHECK
+  # Exit if the iptables command is not available
+  if [[ ! -x "$IPTABLES" ]]; then
+    _error "The iptables command is not in the path or not installed"
+    #exit 203
+  fi
 
+  # Exit if the config have not been sourced
+  if [[ -z "$IF_CONFIG_SOURCED" ]]; then
+    _error "The configuration file have not been source or is not readable"
+    exit 204
+  fi
+  
+  # Exit if the defaultaction is invalid
+  if [[ ! $DEFAULT_ACTION =~ ^[a-zA-Z]+$ ]]; then
+    _error "The default action is not a valid string"
+    exit 107
+  fi
+  
+
+  ### MAIN RUNNING
   case "$main_command" in
   start)
     _echo "Setting firewall rules. Enable firewall secure policy"
@@ -741,18 +797,6 @@ function main() {
 ###### RUNNING ######
 # Load global configuration
 [[ -r $IPTABLES_CONFIG ]] && source $IPTABLES_CONFIG
-
-# Exit if the iptables command is not available
-if [[ ! -x "$IPTABLES" ]]; then
-  _error "The iptables command is the path or not installed"
-   #exit 203
-fi
-
-# Exit if the config have not been sourced
-if [[ -z "$IF_CONFIG_SOURCED" ]]; then
-  _error "The configuration file have not been source or is not readable"
-  exit 204
-fi
 
 main "$@"
 
