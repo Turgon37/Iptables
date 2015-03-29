@@ -23,7 +23,7 @@ Use the `help` command to show the full list of command
 The default configuration file's location is in /etc/default/iptables
 The configuration file consists in a simple shell script which contains only variable declaration because it is simply sourced at the iptables.sh startup.
 
-  * **CHAINS**
+  1. **CHAINS**
 
 The configuration file contains a shell variable for each chain name. 
 For example the chain INPUT of FILTER table is configured in variable named :
@@ -47,9 +47,9 @@ RULES
 
 => Comments string is allowed with a sharp as the first caracter.
 
-    * **RULES**
+  * **RULES**
 
-Each rules have the following format : 
+Each RULES have the following format : 
 
 >COMMAND COMMAND COMMAND
 
@@ -68,9 +68,10 @@ COMMAND
 
 A list of space separated command whose concerns the same rule. Theses command are all OPTIONNAL, you can put just these you want
 
-    * **COMMAND**
+  * **COMMAND**
+   
   
-      * `INTERFACE:INTERFACE` or `INTERFACE`
+  1. `INTERFACE:INTERFACE` or `INTERFACE`
   
   Specify an interface matching, INTERFACE must be a interface name such as eth0, wlan0.. or * to specify 'all interface'
   
@@ -80,28 +81,27 @@ A list of space separated command whose concerns the same rule. Theses command a
   
   If you use the FORWARD chain you must specify the two interface
   
-    * `d:IP/CIDR_MASK` or `dst:IP/CIDR_MASK` or `s:IP/CIDR_MASK` or `src:IP/CIDR_MASK`
+  2. `d:IP/CIDR_MASK` or `dst:IP/CIDR_MASK` or `s:IP/CIDR_MASK` or `src:IP/CIDR_MASK`
     
   This command match for a specific ip, ip range, or ip network. The mask must be given in CIDR notation.
   
   The command `src` or `s` specify a source address and the command `dst` or `d` specify a destination address
   
-    * `tcp:PORT` `tcp:PORT:PORT`    (PORT is PORT or PORT-PORT)
+
+  3. `tcp:PORT` `tcp:PORT:PORT`    (PORT is PORT or PORT-PORT)
     
   Tcp match, the PORT can be a simple PORT or a port range as `PORT-PORT`.
   
   If only one port option is given it's the destination port, if the two are given the first (at the left) is the source and the other at the right is the destination
 
-    * `udp:PORT` `udp:PORT:PORT`    (PORT is PORT or PORT-PORT)
+  4. `udp:PORT` `udp:PORT:PORT`    (PORT is PORT or PORT-PORT)
     
   Udp match, same functionnality that TCP just above
   
-    * `state:STATE`    (STATE can be STATE,STATE,STATE ...)
+  5. `state:STATE`    (STATE can be STATE,STATE,STATE ...)
     
   Match packet by state, the state words can be all of these are defined in the iptables man page.
-  
 
-    
   * **COMMAND IPTABLE**
   
   Because the script cannot handle all iptables options a command string is providing to allow the user to put some manual iptables command. Theses command wiil be run by the script as automatics commands.
