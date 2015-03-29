@@ -1,8 +1,8 @@
 #!/bin/bash
 #title         :iptables
 #description   :Configure rules for iptables firewall
-#author        :P.GINDRAUD
-#author_contact:pgindraud@gmail.com
+#author        :P.GINDRAUD, T.PAJON
+#author_contact:pgindraud@gmail.com,th.pajon45@gmail.com
 #created_on    :2014-05-30
 #usage         :./iptables <CMD>
 #usage_info    :use command 'help'
@@ -26,7 +26,7 @@
 # version 2.2 : 2014-10-26
 #    +add a new configuration file /etc/default/iptables
 #    +set routing rules by a loop for configuration file
-# version 3.0 : 2015-03-28
+# version 3.0 : 2015-03-29
 #    +refunding main loop and core processing, full dynamic loading
 #
 readonly VERSION='3.0'
@@ -34,18 +34,20 @@ readonly VERSION='3.0'
 INPUT=
 OUTPUT=
 FORWARD=
+PREROUTING=
+POSTROUTING=
 COMMANDS=
+SERVICES=
 IS_ROUTER=0
 DEFAULT_ACTION=ACCEPT
 TIMEOUT_FOR_TEST=9
 
 
 #========== INTERNAL OPTIONS ==========#
-readonly IPTABLES="echo"
-#readonly IPTABLES=$(which iptables 2>/dev/null)
+readonly IPTABLES=$(which iptables 2>/dev/null)
 readonly IP6TABLES=$(which ip6tables 2>/dev/null)
-#IPTABLES_CONFIG=/etc/default/iptables
-readonly IPTABLES_CONFIG=./config
+
+readonly IPTABLES_CONFIG=/etc/default/iptables
 
 readonly IPTABLES_BACKUP_FILE=/etc/iptables.backup
 
@@ -553,16 +555,22 @@ function _run_command() {
 function restart_process() {
   for process in $1; do
     # Check process status
-    /etc/init.d/$process status 2>/dev/null 1>&2
-    if [ $? -eq 0 ]; then
-      # Restart the process if it is running
-      service $process restart 2>/dev/null 1>&2
-      if [ $? -eq 1 ]; then
-        # Return error if the process can't be restarted
-        _error "Process $process hasn't been restarted."
-        continue
+    _debug "trying to restart $process"
+    
+    # init.d service
+    if [[ -x /etc/init.d/$process ]]; then
+      # get the current process status
+      /etc/init.d/$process status 2>/dev/null 1>&2
+      if [[ $? -eq 0 ]]; then
+        # restart the process if it is running
+        /etc/init.d/$process restart 2>/dev/null 1>&2
+        if [[ $? -ne 0 ]]; then
+          # return error if the process can't be restarted
+          _error "Process $process hasn't been restarted."
+          continue
+        fi
       fi
-      echo "$process has been restarted."
+      _echo "$process has been restarted."
     fi
   done
 }
@@ -630,6 +638,8 @@ function do_restart() {
   # stop success, now run start
   do_start
   r=$?
+  # Trying to restart some depends services
+  restart_process "$SERVICES"
   if [[ $r -ne 0 ]]; then
     _error "Failed to start the firewall."
     return $r
@@ -861,334 +871,3 @@ function main() {
 [[ -r $IPTABLES_CONFIG ]] && source $IPTABLES_CONFIG
 
 main "$@"
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-### ---
-### CONNECTION STATE
-### ---
-function _allow_connection_state() {
-# Keep established connections
-  if [ -n "$NETWORK_ETH0" ]; then
-    $IPTABLES -A INPUT -i eth0 --destination ${NETWORK_ETH0} -m state --state RELATED,ESTABLISHED -j ACCEPT
-    $IPTABLES -A OUTPUT -o eth0 --source ${NETWORK_ETH0} -m state --state RELATED,ESTABLISHED -j ACCEPT
-  fi
-
-  if [ -n "$NETWORK_WLAN0" ]; then
-    $IPTABLES -A INPUT -i wlan0 --source ${NETWORK_WLAN0} --destination ${NETWORK_WLAN0} -m state --state RELATED,ESTABLISHED -j ACCEPT
-    $IPTABLES -A OUTPUT -o wlan0 --source ${NETWORK_WLAN0} --destination ${NETWORK_WLAN0} -m state --state RELATED,ESTABLISHED -j ACCEPT
-  fi
-
-  if [ -n "$NETWORK_VPN" ]; then
-    $IPTABLES -A INPUT -i tun0 --source ${NETWORK_VPN} --destination ${NETWORK_VPN} -m state --state RELATED,ESTABLISHED -j ACCEPT
-    $IPTABLES -A OUTPUT -o tun0 --source ${NETWORK_VPN} --destination ${NETWORK_VPN} -m state --state RELATED,ESTABLISHED -j ACCEPT
-  fi
-
-  if [ -n "$NETWORK_ETH0_ALT" ]; then
-    $IPTABLES -A INPUT -i eth0 --source ${NETWORK_ETH0_ALT} --destination ${HOST_LOCAL_ALT} -m state --state RELATED,ESTABLISHED -j ACCEPT
-    $IPTABLES -A OUTPUT -o eth0 --source ${HOST_LOCAL_ALT} --destination ${NETWORK_ETH0_ALT} -m state --state RELATED,ESTABLISHED -j ACCEPT
-  fi
-
-  if [ $IF_IPV4_FORWARD -eq 1 ]; then
-    $IPTABLES -A FORWARD -m state --state RELATED,ESTABLISHED -j ACCEPT
-  fi
-}
-
-function _setup_nat_masquerading() {
-  if [ -n "$NETWORK_VPN" ]; then
-    $IPTABLES -t nat -A POSTROUTING -o eth0 --source ${NETWORK_VPN} -j MASQUERADE -m comment --comment "Masquerade connection from VPN network to eth0"
-  fi
-}
-
-
-### ---
-### PROTOCOLE ICMP
-### ---
-# Set the rules for allow icmp input output
-function _allow_input_output_icmp() {
-# ICMP [In,Out]
-if [ -n "$NETWORK_ETH0" ]; then
-  $IPTABLES -t filter -A INPUT -i eth0 --source ${NETWORK_ETH0} --destination ${NETWORK_ETH0} -p icmp -j ACCEPT -m comment --comment "Allow PING in for eth0 network"
-  $IPTABLES -t filter -A OUTPUT -o eth0 --source ${NETWORK_ETH0} -p icmp -j ACCEPT -m comment --comment "Allow PING out from eth0"
-fi
-
-if [ -n "$NETWORK_WLAN0" ]; then
-  $IPTABLES -t filter -A INPUT -i wlan0 --source ${NETWORK_WLAN0} --destination ${NETWORK_WLAN0} -p icmp -j ACCEPT -m comment --comment "Allow PING in for wlan0 network"
-  $IPTABLES -t filter -A OUTPUT -o wlan0 --source ${NETWORK_WLAN0} --destination ${NETWORK_WLAN0} -p icmp -j ACCEPT -m comment --comment "Allow PING out from wlan0"
-fi
-
-if [ -n "$NETWORK_VPN" ]; then
-  $IPTABLES -t filter -A INPUT -i tun0 --source ${NETWORK_VPN} --destination ${NETWORK_VPN} -p icmp -j ACCEPT -m comment --comment "Allow PING in for vpn network"
-  $IPTABLES -t filter -A OUTPUT -o tun0 --source ${NETWORK_VPN} --destination ${NETWORK_VPN} -p icmp -j ACCEPT -m comment --comment "Allow PING out from vpn network"
-fi
-}
-
-# Set the rules for icmp packets routing
-function _allow_routing_icmp() {
-# ICMP [Forward]
-  $IPTABLES -t filter -A FORWARD -p icmp -j ACCEPT -m comment --comment "Allow ICMP routing"
-}
-
-
-
-
-
-### ---
-### SERVICES
-### ---
-# Set the rules for input or output connections
-
-
-
-## ALL
-function _allow_input_output_service_for_all() {
-# WakeOnLan AND Wol Relayd[In,Out]
-  if [ -n "${WOLRELAYD_LISTEN_PORT}" ]; then
-    $IPTABLES -t filter -A INPUT -p udp --dport ${WOLRELAYD_LISTEN_PORT} -j ACCEPT -m comment --comment "Allow Wake On Lan relay in"
-    $IPTABLES -t filter -A OUTPUT -p udp --dport ${WOLRELAYD_LISTEN_PORT} -j ACCEPT -m comment --comment "Allow Wake On Lan out"
-  fi
-
-# DHCP server [In,Out]
-  $IPTABLES -t filter -A INPUT -p udp --sport 68 --dport 67 -j ACCEPT -m comment --comment "Allow DHCP server in from all"
-  $IPTABLES -t filter -A OUTPUT -p udp --sport 67 --dport 68 -j ACCEPT -m comment --comment "Allow DHCP server out from all"
-}
-
-
-
-## %%%%%%%%%%%%%%%%%  ETH0  %%%%%%%%%%%%%%%%%
-function _allow_input_output_service_for_eth0() {
-
-# SSH [In,Out]
-  if [ -n "${SSHD_LISTEN_PORT}" ]; then
-    $IPTABLES -t filter -A INPUT -i eth0 --destination ${NETWORK_ETH0} -p tcp --dport ${SSHD_LISTEN_PORT} -j ACCEPT -m comment --comment "Allow SSH in for eth0"
-    $IPTABLES -t filter -A OUTPUT -o eth0 --source ${NETWORK_ETH0} -p tcp --dport 22 -j ACCEPT -m comment --comment "Allow SSH out from eth0"
-  fi
-
-# WHOIS []
-  #$IPTABLES -t filter -A OUTPUT -o eth0 --source ${NETWORK_ETH0} -p tcp --dport 43 -j ACCEPT -m comment --comment "Allow WHOIS lookup from eth0"
-
-# SMTP [In]
-  $IPTABLES -t filter -A INPUT -i eth0 --source ${NETWORK_ETH0} --destination ${NETWORK_ETH0} -p tcp --dport 25 -j ACCEPT -m comment --comment "Allow SMTP in for eth0"
-
-# DNS [In,Out]
-  if [ -n "${BIND_LISTEN_PORT}" ]; then
-    $IPTABLES -t filter -A INPUT -i eth0 --source ${NETWORK_ETH0} --destination ${NETWORK_ETH0} -p udp --dport ${BIND_LISTEN_PORT} -j ACCEPT -m comment --comment "Allow DNS in for eth0"
-    $IPTABLES -t filter -A INPUT -i eth0 --source ${NETWORK_ETH0} --destination ${NETWORK_ETH0} -p tcp --dport ${BIND_LISTEN_PORT} -j ACCEPT -m comment --comment "Allow DNS in for eth0"
-  fi
-
-  $IPTABLES -t filter -A OUTPUT -o eth0 --source ${NETWORK_ETH0} -p udp --dport 53 -j ACCEPT -m comment --comment "Allow DNS out from eth0"
-  $IPTABLES -t filter -A OUTPUT -o eth0 --source ${NETWORK_ETH0} -p tcp --dport 53 -j ACCEPT -m comment --comment "Allow DNS out from eth0"
-
-# DHCP client []
-  #$IPTABLES -t filter -A OUTPUT -p udp --sport 68 --dport 67 -j ACCEPT -m comment --comment "Allow DHCP client out from all"
-
-# HTTP [Out]
-#	$IPTABLES -t filter -A INPUT -i eth0 --destination ${NETWORK_ETH0} -p tcp --dport 80 -j ACCEPT -m comment --comment "Allow HTTP in for eth0"
-  $IPTABLES -t filter -A OUTPUT -o eth0 --source ${NETWORK_ETH0} -p tcp --dport 80 -j ACCEPT -m comment --comment "Allow HTTP out from eth0"
-
-# NTP [Out]
-  $IPTABLES -t filter -A OUTPUT -o eth0 --source ${NETWORK_ETH0} -p udp --dport 123 -j ACCEPT -m comment --comment "Allow NTP out from eth0"
-
-# Https [Out]
-  $IPTABLES -t filter -A OUTPUT -o eth0 --source ${NETWORK_ETH0} -p tcp --dport 443 -j ACCEPT -m comment --comment "Allow HTTPs out from eth0"
-
-# Microsoft-ds/Cifs [Out]
-  if [ -n "${CIFS_PORT}" ]; then
-    $IPTABLES -t filter -A OUTPUT -o eth0 --source ${NETWORK_ETH0} --destination ${NETWORK_ETH0} -p tcp --dport ${CIFS_PORT} -j ACCEPT -m comment --comment "Allow Microsoft-ds/CIFS out from eth0 for lan"
-  fi
-
-# Smtps []
-  #$IPTABLES -t filter -A OUTPUT -o eth0 --source ${NETWORK_ETH0} -p tcp --dport 465 -j ACCEPT -m comment --comment "Allow SMTPs out from eth0"
-
-# Syslog [In]
-  if [ -n "${SYSLOG_REMOTE_HOSTS}" ]; then
-    $IPTABLES -t filter -A INPUT -i eth0 --source "${SYSLOG_REMOTE_HOST}" --destination ${NETWORK_ETH0} -p udp --dport 514 -j ACCEPT -m comment --comment "Allow Remote Syslog entries in for eth0"
-    $IPTABLES -t filter -A INPUT -i eth0 --source "${SYSLOG_REMOTE_HOST}" --destination ${NETWORK_ETH0} -p tcp --dport 514 -j ACCEPT -m comment --comment "Allow Remote Syslog entries in for eth0"
-  fi
-
-# Submission [Out]
-  if [ -n "${POSTFIX_RELAYHOST_ADDRESS}" ]; then
-    $IPTABLES -t filter -A OUTPUT -o eth0 --source ${NETWORK_ETH0} --destination ${POSTFIX_RELAYHOST_ADDRESS} -p tcp --dport 587 -j ACCEPT -m comment --comment "Allow Authentified SMTP (Submission) out from eth0"
-  fi
-
-# OpenVPN [In]
-  if [ -n "${OPENVPN_LISTEN_PORT}" ] && [ -n "${OPENVPN_LISTEN_PROTOCOL}" ]; then
-    $IPTABLES -t filter -A INPUT -i eth0 --destination ${NETWORK_ETH0} -p ${OPENVPN_LISTEN_PROTOCOL} --dport ${OPENVPN_LISTEN_PORT} -j ACCEPT -m comment --comment "Allow VPN in for eth0"
-  fi
-
-# Minissdpd []
-  #$IPTABLES -t filter -A INPUT -i eth0 --destination ${NETWORK_ETH0} -p udp --dport 1900 -j ACCEPT -m comment --comment "Allow SSDP in for eth0"
-
-# Mysql [In]
-  if [ -n "${MYSQL_LISTEN_PORT}" ]; then
-    $IPTABLES -t filter -A INPUT -i eth0 --source ${NETWORK_ETH0} --destination ${NETWORK_ETH0} -p tcp --dport ${MYSQL_LISTEN_PORT} -j ACCEPT -m comment --comment "Allow MySQL in for eth0"
-  fi
-
-# ShellInABox [In]
-  if [ -n "${SHELLINABOX_LISTEN_PORT}" ]; then
-    $IPTABLES -t filter -A INPUT -i eth0 --destination ${NETWORK_ETH0} -p tcp --dport ${SHELLINABOX_LISTEN_PORT} -j ACCEPT -m comment --comment "Allow WebSSH ShellInABox in for eth0"
-  fi
-
-# NAT-PMP []
-  #$IPTABLES -t filter -A OUTPUT -o eth0 --source ${NETWORK_ETH0} -p udp --dport 5351 -j ACCEPT -m comment --comment "Allow NAT-PMP out from eth0"
-
-# Transmission torrent control panel [In]
-  if [ -n "${TRANSMISSION_RPC_LISTEN_PORT}" ]; then
-    $IPTABLES -t filter -A INPUT -i eth0 --source ${NETWORK_ETH0} --destination ${NETWORK_ETH0} -p tcp --dport ${TRANSMISSION_RPC_LISTEN_PORT} -j ACCEPT  -m comment --comment "Allow Transmission Remote Web Panel in for eth0"
-  fi
-
-# Git [Out]
-  $IPTABLES -t filter -A OUTPUT -o eth0 --source ${NETWORK_ETH0} -p tcp --dport 9418 -j ACCEPT -m comment --comment "Allow Git out from eth0"
-
-# Transmission torrent peer [In,Out]
-  if [ -n "${TRANSMISSION_PEER_LISTEN_PORT}" ] && [ -n "${TRANSMISSION_USERNAME}" ]; then
-    $IPTABLES -t filter -A INPUT -i eth0 --destination ${NETWORK_ETH0} -p udp --dport ${TRANSMISSION_PEER_LISTEN_PORT} -j ACCEPT -m comment --comment "Allow Transmission Torrent peer listen for eth0"
-    $IPTABLES -t filter -A INPUT -i eth0 --destination ${NETWORK_ETH0} -p tcp --dport ${TRANSMISSION_PEER_LISTEN_PORT} -j ACCEPT -m comment --comment "Allow Transmission Torrent peer listen for eth0"
-
-    $IPTABLES -t filter -A OUTPUT -o eth0 --source ${NETWORK_ETH0} -p tcp -m owner --uid-owner ${TRANSMISSION_USERNAME} -j ACCEPT -m comment --comment "Allow Transmission Torrent data upload for SYSTEM USER ${TRANSMISSION_USERNAME}"
-  fi
-}
-
-
-
-## %%%%%%%%%%%%%%%%%  WLAN0  %%%%%%%%%%%%%%%%%
-function _allow_input_output_service_for_wlan0() {
-
-# SSH [In]
-  if [ -n "${SSHD_LISTEN_PORT}" ]; then
-    $IPTABLES -t filter -A INPUT -i wlan0 --source ${NETWORK_WLAN0} --destination ${NETWORK_WLAN0} -p tcp --dport ${SSHD_LISTEN_PORT} -j ACCEPT -m comment --comment "Allow SSH in for wlan0"
-  fi
-
-# DNS [In]
-  if [ -n "${BIND_LISTEN_PORT}" ]; then
-    $IPTABLES -t filter -A INPUT -i wlan0 --source ${NETWORK_WLAN0} --destination ${NETWORK_WLAN0} -p udp --dport ${BIND_LISTEN_PORT} -j ACCEPT -m comment --comment "Allow DNS in for wlan0"
-    $IPTABLES -t filter -A INPUT -i wlan0 --source ${NETWORK_WLAN0} --destination ${NETWORK_WLAN0} -p tcp --dport ${BIND_LISTEN_PORT} -j ACCEPT -m comment --comment "Allow DNS in for wlan0"
-  fi
-
-# HTTP [In]
-#	$IPTABLES -t filter -A INPUT -i wlan0 --destination ${NETWORK_WLAN0} -p tcp --dport 80 -j ACCEPT -m comment --comment "Allow HTTP in for wlan0"
-
-# Transmission torrent control panel [In]
-  if [ -n "${TRANSMISSION_RPC_LISTEN_PORT}" ]; then
-    $IPTABLES -t filter -A INPUT -i wlan0 --source ${NETWORK_WLAN0} --destination ${NETWORK_WLAN0} -p tcp --dport ${TRANSMISSION_RPC_LISTEN_PORT} -j ACCEPT  -m comment --comment "Allow Transmission Remote Web Panel in for wlan0"
-  fi
-}
-
-
-
-## %%%%%%%%%%%%%%%%%  TUN0 (vpn)  %%%%%%%%%%%%%%%%%
-function _allow_input_output_service_for_vpn() {
-
-# SSH [In]
-if [ -n "${SSHD_LISTEN_PORT}" ]; then
-  $IPTABLES -t filter -A INPUT -i tun0 --source ${NETWORK_VPN} --destination ${NETWORK_VPN} -p tcp --dport ${SSHD_LISTEN_PORT} -j ACCEPT -m comment --comment "Allow SSH in for VPN"
-fi
-
-# DNS [In]
-  if [ -n "${BIND_LISTEN_PORT}" ]; then
-    $IPTABLES -t filter -A INPUT -i tun0 --source ${NETWORK_VPN} --destination ${NETWORK_VPN} -p udp --dport ${BIND_LISTEN_PORT} -j ACCEPT -m comment --comment "Allow DNS in for VPN"
-    $IPTABLES -t filter -A INPUT -i tun0 --source ${NETWORK_VPN} --destination ${NETWORK_VPN} -p tcp --dport ${BIND_LISTEN_PORT} -j ACCEPT -m comment --comment "Allow DNS in for VPN"
-  fi
-
-# HTTP [In]
-#	$IPTABLES -t filter -A INPUT -i tun0 --destination ${NETWORK_VPN} -p tcp --dport 80 -j ACCEPT -m comment --comment "Allow HTTP in for VPN"
-
-# Transmission torrent control panel [In]
-  if [ -n "${TRANSMISSION_RPC_LISTEN_PORT}" ]; then
-    $IPTABLES -t filter -A INPUT -i tun0 --source ${NETWORK_VPN} --destination ${NETWORK_VPN} -p tcp --dport ${TRANSMISSION_RPC_LISTEN_PORT} -j ACCEPT  -m comment --comment "Allow Transmission Remote Web Panel in for VPN"
-  fi
-}
-
-
-
-## %%%%%%%%%%%%%%%%% ETH0:0  %%%%%%%%%%%%%%%%%
-function _allow_input_output_service_for_eth0_0() {
-
-# SSH [In]
-if [ -n "${SSHD_LISTEN_PORT}" ]; then
-  $IPTABLES -t filter -A INPUT -i eth0 --source ${NETWORK_ETH0_ALT} --destination ${HOST_LOCAL_ALT} -p tcp --dport ${SSHD_LISTEN_PORT} -j ACCEPT -m comment --comment "Allow SSH in for eth0-ALT"
-fi
-}
-
-
-
-
-
-# Set rule for service packets routing
-function _allow_routing_service() {
-  # ignore empty and commented lines
-  local forwardedPort=$(echo "$FORWARDED_PORT" | grep --invert-match --regexp='#' --regexp='^$')
-  # count the number of rules
-  local nbLine=$(echo "$forwardedPort" | wc -l)
-
-  for i in `seq $nbLine`; do
-    line=$(echo "$forwardedPort" | head -n $i | tail -n1)
-
-    # get comment informations
-    if [ -n "$(echo $line | grep 'comment/')" ]; then
-      local comment_opts=$(echo $line | sed -E 's/^.*(comment)\/("[-_A-Za-z ]+").*/-m comment --comment/')
-      local comment_text=$(echo $line | sed -E 's/^.*comment\/"([-_A-Za-z ]+)".*/\1/')
-    fi
-
-    local port_opts=$(echo $line | sed -E 's/^(tcp|udp)\/([0-9:]+).*/-p \1 --dport \2/')
-    # apply rule
-    $IPTABLES -t filter -A FORWARD $port_opts -j ACCEPT $comment_opts "$comment_text"
-  done
-}
-
-
-
-
-####### GARBAGE
-
-# HTTP + HTTPS Out
-#$IPTABLES -t filter -A OUTPUT -p tcp --dport 80 -j ACCEPT
-#$IPTABLES -t filter -A OUTPUT -p tcp --dport 443 -j ACCEPT
-
-# HTTP + HTTPS In
-#$IPTABLES -t filter -A INPUT -p tcp --dport 80 -j ACCEPT
-#$IPTABLES -t filter -A INPUT -p tcp --dport 443 -j ACCEPT
-#$IPTABLES -t filter -A INPUT -p tcp --dport 8443 -j ACCEPT
-
-# FTP Out
-#$IPTABLES -t filter -A OUTPUT -p tcp --dport 20:21 -j ACCEPT
-
-# FTP In
-#modprobe ip_conntrack_ftp # ligne facultative avec les serveurs OVH
-#$IPTABLES -t filter -A INPUT -p tcp --dport 20:21 -j ACCEPT
-#$IPTABLES -t filter -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
-
-# Mail SMTP:25
-#$IPTABLES -t filter -A INPUT -p tcp --dport 25 -j ACCEPT
-#$IPTABLES -t filter -A OUTPUT -p tcp --dport 25 -j ACCEPT
-
-# Mail POP3:110
-#$IPTABLES -t filter -A INPUT -p tcp --dport 110 -j ACCEPT
-#$IPTABLES -t filter -A OUTPUT -p tcp --dport 110 -j ACCEPT
-
-# Mail IMAP:143
-#$IPTABLES -t filter -A INPUT -p tcp --dport 143 -j ACCEPT
-#$IPTABLES -t filter -A OUTPUT -p tcp --dport 143 -j ACCEPT
-
-# Mail POP3S:995
-#$IPTABLES -t filter -A INPUT -p tcp --dport 995 -j ACCEPT
-#$IPTABLES -t filter -A OUTPUT -p tcp --dport 995 -j ACCEPT
