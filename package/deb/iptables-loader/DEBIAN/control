@@ -5,5 +5,5 @@ Priority: optional
 Architecture: all
 Depends: bash, iptables, iproute
 Maintainer: Pierre GINDRAUD <pgindraud@gmail.com>
-Description: An iptables bash laoder script
+Description: An iptables bash loader script
 Homepage: https://github.com/EngineersStudentsITProjects/Iptables
