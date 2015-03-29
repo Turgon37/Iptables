@@ -168,7 +168,7 @@ function _debug() {
 
 # Check if the script is run by root or not. If not, prompt error and exit
 function _isRunAsRoot() {
-  if [[ "$UID" != "0" ]]; then
+  if [[ "$(id -u)" != "0" ]]; then
     _error "This script must be run as root."
     exit 200
   fi
