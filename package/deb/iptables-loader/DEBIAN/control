@@ -1,0 +1,9 @@
+Package: iptables-loader
+Version: 3.0.0
+Section: net
+Priority: optional
+Architecture: all
+Depends: bash, iptables, iproute
+Maintainer: Pierre GINDRAUD <pgindraud@gmail.com>
+Description: An iptables bash laoder script
+Homepage: https://github.com/EngineersStudentsITProjects/Iptables

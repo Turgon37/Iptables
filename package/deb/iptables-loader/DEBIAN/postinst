@@ -1,0 +1,8 @@
+#!/bin/sh
+
+if [ -x "/etc/init.d/iptables" ]; then
+  update-rc.d iptables defaults >/dev/null
+  invoke-rc.d iptables start || exit $?
+fi
+
+exit 0

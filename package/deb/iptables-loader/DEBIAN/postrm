@@ -1,0 +1,15 @@
+#!/bin/sh
+
+case "$1" in
+purge|disappear)
+  # Remove configuration
+  rm -f /etc/default/iptables
+  ;;
+remove|upgrade|failed-upgrade|abort-install|abort-upgrade)
+  # nothing
+  ;;
+esac
+
+update-rc.d iptables remove >/dev/null
+
+exit 0
