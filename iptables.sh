@@ -199,6 +199,12 @@ function parseIface() {
   expr match "$1" "${2}${REG_IFACE}${3}"
 }
 
+# Return the list of availables interfaces
+# @return[string] : the list of availables interfaces
+function ifacesList() {
+  ip link show | awk -F': ' '/^[0-9]*:/{print $2}' | awk -F'\n' '{if ($1 ~ /'$E_REG_IFACE'/) print $1}'
+}
+
 
 ### ---
 ### TABLES MGMT
