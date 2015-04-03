@@ -33,6 +33,35 @@ DAEMON_ARGS=""
 . /lib/lsb/init-functions
 
 
+###########################
+# Restart running process #
+###########################
+# Check process status and restart it if it is running
+# @param[string] : list of process to restart
+function restartProcess() {
+  for process in $1; do
+    # Check process status
+    log_daemon_msg "trying to restart $process"
+    
+    # init.d service
+    if [ -x /etc/init.d/$process ]; then
+      # get the current process status
+      /etc/init.d/$process status 2>/dev/null 1>&2
+      if [ $? -eq 0 ]; then
+        # restart the process if it is running
+        /etc/init.d/$process restart 2>/dev/null 1>&2
+        if [ $? -ne 0 ]; then
+          # return error if the process can't be restarted
+          echo "Process $process hasn't been restarted." 1>&2
+        else
+          echo "$process has been restarted."
+        fi
+      fi
+    fi
+  done
+}
+
+
 
 case "$1" in
   start)
@@ -66,7 +95,10 @@ case "$1" in
     $DAEMON restart
     case $? in
       # restart success
-      0) log_end_msg 0;;
+      0)
+        log_end_msg 0
+        # trying to restart some depends process
+        restartProcess "$SERVICES";;
       # start failed
       *) log_end_msg 1
         log_failure_msg "$DESC: Failed to restart the firewall."
