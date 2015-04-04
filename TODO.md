@@ -3,7 +3,6 @@
   2. ~~Add a comment facility in filter rules~~
   3. Add an anti-ddos facility
   4. ~~Add a MASQUERADE facility~~
-  5. Make a debian packet
+  5. ~~Make a debian packet~~
   6. Implement the TARPIT action
   7. ~~Add a way to permit script to restart service after reloading rules~~
-	
