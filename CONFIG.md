@@ -77,32 +77,27 @@ A list of space separated command whose concerns the same rule. Theses command a
   1. `INTERFACE:INTERFACE` or `INTERFACE`
 
     Specify an interface matching, INTERFACE must be a interface name such as eth0, wlan0.. or * to specify 'all interface'
-
     If you give only one interface name, it wiil be consider as input interface for input chains (INPUT, PREROUTING) and as output interface for output chains (OUTPUT, POSTROUTING)
-
     If you give the two interface name (including the * matching) the first name (at the left) will be consider as input interface and the second name (at the right) will be the output interface.
-
     If you use the FORWARD chain you must specify the two interface
 
   2. IP ADDRESS
     * `d:IP/CIDR_MASK` or `dst:IP/CIDR_MASK` or `s:IP/CIDR_MASK` or `src:IP/CIDR_MASK`
 
       This command match for a specific ip, ip range, or ip network. The mask must be given in CIDR notation.
-
       The command `src` or `s` specify a source address and the command `dst` or `d` specify a destination address
 
   3. PROTOCOL
 
     * `tcp:PORT` `tcp:PORT:PORT`  (PORT is simple PORT or range PORT-PORT)
-
-      Tcp match, the PORT can be a simple PORT or a port range as `PORT-PORT`.
-
+    
+      Tcp match, the PORT can be a simple PORT or a port range as `PORT-PORT`
       If only one port option is given it's the destination port, if the two are given the first (at the left) is the source and the other at the right is the destination
-			
-		* `sports|dports|ports:PORT[,PORT]`   (PORT is simple PORT or range PORT-PORT)
-		
-			Tcp multiport matching, the first arguments is a words in sports, dports and ports which mean respectively source, destinations and source-destinations ports matching.
-			And the second arg is a list of port or port range.
+    
+    * `sports|dports|ports:PORT[,PORT]`   (PORT is simple PORT or range PORT-PORT)
+    
+      Tcp multiport matching, the first arguments is a words in sports, dports and ports which mean respectively source, destinations and source-destinations ports matching.
+      And the second arg is a list of port or port range.
 
     * `udp:PORT` `udp:PORT:PORT`  (PORT is simple PORT or range PORT-PORT)
 
@@ -115,11 +110,11 @@ A list of space separated command whose concerns the same rule. Theses command a
 
   4. MATCH
     * `tcp:FLAG[,FLAG]:FLAG[,FLAG]`
-      
+
       Define a tcp flag match. See the manual page iptables EXTENSIONS for more details about --tcp-flags
-      
-    * `tcp:syn` of * `tcp:SYN`
-    
+
+    * `tcp:syn` or `tcp:SYN`
+
       Define a tcp syn flag match. See the manual page iptables EXTENSIONS for more details about --syn
 
     * `state:STATE`    (STATE can be STATE,STATE,STATE ...)
@@ -135,7 +130,7 @@ A list of space separated command whose concerns the same rule. Theses command a
   5. ACTION
 
     * `j:ACTION` or `jump:ACTION`
-
+    
       This set a simple action
       The ACTION can be ACCEPT, DROP, RETURN
 
@@ -153,7 +148,7 @@ A list of space separated command whose concerns the same rule. Theses command a
 
   Because the script cannot handle all iptables options a command string is providing to allow the user to put some manual iptables command. Theses command wiil be run by the script as automatics commands.
   
-	These commands are run first, before all auto rules
+  These commands are run first, before all auto rules
 	
   The configuration variable is named COMMAND, the command are on one-per-line and can be put like this :
   
@@ -169,42 +164,40 @@ COMMANDS="
 ```
 
 
-*	**SECURITY**
+* **SECURITY**
+
+  The script try to provides some security feature with the firewall.
+  The global boolean `IS_SECURITY_ENABLED` define if all security rules must be enabled
 	
-	The script try to provides some security feature with the firewall.
-	The global boolean `IS_SECURITY_ENABLED` define if all security rules must be enabled
-	
-	1. DDOS
-	
-		The boolean `SECURITY_DDOS_RULES` enable or not the security rules about DDOS.
+  1. DDOS
+    
+    The boolean `SECURITY_DDOS_RULES` enable or not the security rules about DDOS.
+    The variable `DDOS_RULES` contains all anti DDOS rules.
+    In this variable just put the rules. All of these will be prefix with the append command and put in the DDOS_PROTECT chain
 		
-		The variable `DDOS_RULES` contains all anti DDOS rules.
-		In this variable just put the rules. All of these will be prefix with the append command and put in the DDOS_PROTECT chain
+  2. ICMP
 		
-	2. ICMP
-		
-		The boolean `SECURITY_ICMP_RULES` enable or not the security rules about ICMP.
-		
-		The variable `ICMP_RULES` contains all rules aim to protect against icmp attack.
-		In this variable just put the rules. All of these will be prefix with the append command and put in the ICMP_PROTECT chain
+    The boolean `SECURITY_ICMP_RULES` enable or not the security rules about ICMP.
+    The variable `ICMP_RULES` contains all rules aim to protect against icmp attack.
+    In this variable just put the rules. All of these will be prefix with the append command and put in the ICMP_PROTECT chain
 
 
 * **OPTIONS**
 
-	The rest of the configuration file must contains some global variable such as :
+  The rest of the configuration file must contains some global variable such as :
 
-	1. IS_ROUTER [Boolean]
+  1. IS_ROUTER [Boolean]
 
-	  Determine if the router mode is enabled. If True all forward rules will be loaded, if False there will not.
+    Determine if the router mode is enabled. If True all forward rules will be loaded, if False there will not.
+    
+  2. DEFAULT_ACTION [String]
 
-	2. DEFAULT_ACTION [String]
+    Define the default iptables action when no j or jump parameter is given.
+    Default to ACCEPT.
 
-		Define the default iptables action when no j or jump parameter is given.
-	  	Default to ACCEPT.
+  3. TIMEOUT_FOR_TEST [Integer]
 
-	3. TIMEOUT_FOR_TEST [Integer]
-
-		The number of second to wait for reading the validating word during test script command
+    The number of second to wait for reading the validating word during test script command
 
 
 * **SERVICE**
