@@ -37,17 +37,20 @@ FORWARD=
 PREROUTING=
 POSTROUTING=
 COMMANDS=
-SERVICES=
 IS_ROUTER=0
+IS_SECURITY_ENABLED=0
+DDOS_RULES=
 DEFAULT_ACTION=ACCEPT
 TIMEOUT_FOR_TEST=9
 
 
 #========== INTERNAL OPTIONS ==========#
-readonly IPTABLES=$(which iptables 2>/dev/null)
+#readonly IPTABLES=$(which iptables 2>/dev/null)
+readonly IPTABLES=$(which echo 2>/dev/null)
 readonly IP6TABLES=$(which ip6tables 2>/dev/null)
 
-readonly IPTABLES_CONFIG=/etc/default/iptables
+#readonly IPTABLES_CONFIG=/etc/default/iptables
+readonly IPTABLES_CONFIG=./iptables.conf
 
 readonly IPTABLES_BACKUP_FILE=/etc/iptables.backup
 
@@ -89,13 +92,11 @@ readonly E_REG_GW="(${C_SEP}gw)"
 readonly E_REG_STATE="(INVALID|ESTABLISHED|NEW|RELATED|UNTRACKED)"
 readonly REG_STATE="\(INVALID\|ESTABLISHED\|NEW\|RELATED\|UNTRACKED\)"
 
+# REGEX that describe a TCP flag
+readonly E_REG_FLAG="(SYN|ACK|FIN|RST|URG|PSH|ALL|NONE)"
+readonly REG_FLAG="\(SYN\|ACK\|FIN\|RST\|URG\|PSH\|ALL\|NONE\)"
 
 #========== INTERNAL FUNCTIONS ==========#
-
-function dump() {
-  return
-}
-
 
 # Print help msg
 function _usage() {
@@ -121,7 +122,7 @@ Command :
 Options :
   -v, --verbose   Show more running messages 
   -d, --debug     Show debug messages
-  
+
 Return code :
   0     Success
   1-98  Reserved for iptables error code
@@ -187,6 +188,8 @@ function _isTrue() {
 # @param[string] : the input string
 # @param[string] OPTIONNAL : the REGEX prefix
 # @param[string] OPTIONNAL : the REGEX suffix
+# @return[string] : If the regex match, return the IPV4 address name
+#                   which is contains in $1
 function parseAddress4() {
   expr match "$1" "${2}${REG_IPV4}${3}"
 }
@@ -195,6 +198,8 @@ function parseAddress4() {
 # @param[string] : the input string
 # @param[string] OPTIONNAL : the REGEX prefix
 # @param[string] OPTIONNAL : the REGEX suffix
+# @return[string] : If the regex match, return the IFACE name
+#                   which is contains in $1
 function parseIface() {
   expr match "$1" "${2}${REG_IFACE}${3}"
 }
@@ -204,7 +209,6 @@ function parseIface() {
 function ifacesList() {
   ip link show | awk -F': ' '/^[0-9]*:/{print $2}' | awk -F'\n' '{if ($1 ~ /'$E_REG_IFACE'/) print $1}'
 }
-
 
 ### ---
 ### TABLES MGMT
@@ -227,7 +231,6 @@ function _reset_counters() {
   $IPTABLES --table nat --zero
   $IPTABLES --table mangle --zero
 }
-
 
 ### ---
 ### GLOBAL POLICIES
@@ -263,14 +266,6 @@ function _policy {
     _error 'Undefined global policy'
   fi
 }
-
-
-
-function _load_anti_ddos_rules() {
-  $IPTABLES --table filter --new-chain DDOS_PROTECT
-  
-}
-
 
 ### ---
 ### GLOBAL RULES LOADING
@@ -314,6 +309,8 @@ function _load_rules() {
     local protocol_opt=
     local match_opt=
     local action_opt=
+    local add_method="--append $1"
+    
     IFS=$DEFAULT_IFS
     # Loop for each command (separated by F_SEP, pipe as default)
     for c in $entry; do
@@ -321,7 +318,16 @@ function _load_rules() {
       local protocol=
       local action=
       # SOURCE ADDRESS matching
-      if [[ "$c" =~ ^(s|src)${C_SEP}${E_REG_IPV4}$ ]]; then
+      if [[ "$c" =~ ^APPEND$ ]]; then
+        _debug "  => add method : $c"
+        add_method="--append $1"
+      elif [[ "$c" =~ ^INSERT${C_SEP}[1-9]+$ ]]; then
+        _debug "  => add method : $c"
+        local number=$(expr match "$c" ".*:\([1-9]\+\)")
+        if [[ -n $number ]]; then
+          add_method="--insert $1 $number"
+        fi
+      elif [[ "$c" =~ ^(s|src)${C_SEP}${E_REG_IPV4}$ ]]; then
         _debug "  => src addr : $c"
         src_address=$(parseAddress4 "$c" '.*'${C_SEP})
         if [[ -n $src_address && $src_address != '*' ]]; then
@@ -404,7 +410,7 @@ function _load_rules() {
     if [[ -z $action_opt ]]; then
       action_opt="--jump $DEFAULT_ACTION"
     fi
-    $IPTABLES --table $table --append $1 $in_iface $out_iface $src_address $dst_address $protocol_opt $match_opt $action_opt
+    $IPTABLES --table $table $add_method $in_iface $out_iface $src_address $dst_address $protocol_opt $match_opt $action_opt
     local r=$?
     if [[ $r -ne 0 ]]; then
       _error 'An error appear during the last command'
@@ -480,13 +486,21 @@ function _protocol() {
 function _match() {
   _debug "  reading matching entry : $1"
 
-  if [[ "$1" =~ ^state${C_SEP}${E_REG_STATE}(,${E_REG_STATE})*+$ ]]; then
+  if [[ "$1" =~ ^state${C_SEP}${E_REG_STATE}(,${E_REG_STATE})*$ ]]; then
     _debug "    => match : state : $1"
-    match='-m state --state '$(expr match "$1" "state:\($REG_STATE\(,$REG_STATE\)*\)")
+    match='-m state --state '$(expr match "$1" "state${C_SEP}\($REG_STATE\(,$REG_STATE\)*\)")
     return 0
   elif [[ "$1" =~ ^(c|comment)${C_SEP}[-_a-zA-Z0-9]+$ ]]; then
     _debug "    => match : comment : $1"
-    match='-m comment --comment "'$(expr match "$1" '.*:\([-_a-zA-Z0-9]\+\)')'"'
+    match='-m comment --comment '$(expr match "$1" '.*${C_SEP}\([-_a-zA-Z0-9]\+\)')
+    return 0
+  elif [[ "$1" =~ ^tcp${C_SEP}(syn|SYN)$ ]]; then
+    _debug "    => match : tcp flag syn: $1"
+    match='--syn'
+    return 0
+  elif [[ "$1" =~ ^tcp${C_SEP}${E_REG_FLAG}(,${E_REG_FLAG})*${C_SEP}${E_REG_FLAG}(,${E_REG_FLAG})*$ ]]; then
+    _debug "    => match : tcp flag : $1"
+    match='--tcp-flags '$(expr match "$1" "tcp${C_SEP}\($REG_FLAG\(,$REG_FLAG\)*\)")' '$(expr match "$1" "tcp${C_SEP}.*${C_SEP}\($REG_FLAG\(,$REG_FLAG\)*\)")
     return 0
   fi
 
@@ -520,6 +534,23 @@ function _action() {
   return 1
 }
 
+# Provide a module for loading a table with some anti ddos rules
+# @param[string] : the name of the new chain
+# @param[string] : the comma-separated list of chains in which the jump statement must be put
+function _load_sub_chain_rules() {
+  # create the new chain
+  _run_command "--table filter --new-chain $1"
+  r=$?; if [[ $r -ne 0 ]]; then return $r; fi
+  
+  # add jump from other chain to the new one
+  for chain in ${2//,/ }; do
+    _run_command "--table filter --insert $chain 1 --jump $1"
+    r=$?; if [[ $r -ne 0 ]]; then return $r; fi
+  done
+  
+  _load_rules "$1" 
+}
+
 ### ---
 ### IPTABLES COMMAND
 ### ---
@@ -541,11 +572,15 @@ function _run_command() {
       _debug "  => comment : $cmd"
       continue
     fi
+    if [[ "$cmd" =~ ^( )*$|^$ ]]; then
+      continue
+    fi
     IFS=$DEFAULT_IFS
     $IPTABLES $cmd
-    if [[ $result -ne 0 ]]; then
+    r=$?
+    if [[ $r -ne 0 ]]; then
       _error 'An error appear during the last command'
-      return $result
+      return $r
     fi
     IFS=$'\n'
   done
@@ -553,33 +588,7 @@ function _run_command() {
   IFS=$DEFAULT_IFS
 }
 
-###########################
-# Restart running process #
-###########################
-# Check process status and restart it if it is running
-# @param[String] : list of process to restart
-function restart_process() {
-  for process in $1; do
-    # Check process status
-    _debug "trying to restart $process"
-    
-    # init.d service
-    if [[ -x /etc/init.d/$process ]]; then
-      # get the current process status
-      /etc/init.d/$process status 2>/dev/null 1>&2
-      if [[ $? -eq 0 ]]; then
-        # restart the process if it is running
-        /etc/init.d/$process restart 2>/dev/null 1>&2
-        if [[ $? -ne 0 ]]; then
-          # return error if the process can't be restarted
-          _error "Process $process hasn't been restarted."
-          continue
-        fi
-      fi
-      _echo "$process has been restarted."
-    fi
-  done
-}
+
 
 ############################
 # Start the Firewall rules #
@@ -589,10 +598,10 @@ function restart_process() {
 #                X other error codes
 function do_start() {
   local r
-  _policy 'drop'
   _flush_rules
   _flush_chains
   _reset_counters
+  _policy 'drop'
   
   # LOAD MAIN RULES
   _load_rules INPUT "$INPUT"
@@ -600,6 +609,7 @@ function do_start() {
   _load_rules OUTPUT "$OUTPUT"
   r=$?; if [[ $r -ne 0 ]]; then return $r; fi
   
+  # ROUTING RULES
   if _isTrue $IS_ROUTER; then
     _load_rules PREROUTING "$PREROUTING" nat
     r=$?; if [[ $r -ne 0 ]]; then return $r; fi
@@ -611,6 +621,13 @@ function do_start() {
     r=$?; if [[ $r -ne 0 ]]; then return $r; fi
   fi
   
+  # SECURITY RULES
+  if _isTrue "$IS_SECURITY_ENABLED"; then
+    _load_security_rules
+    r=$?; if [[ $r -ne 0 ]]; then return $r; fi
+  fi
+  
+  # MANUAL COMMAND
   _run_command "$COMMANDS"
   r=$?; if [[ $r -ne 0 ]]; then return $r; fi
 }
@@ -644,8 +661,6 @@ function do_restart() {
   # stop success, now run start
   do_start
   r=$?
-  # Trying to restart some depends services
-  restart_process "$SERVICES"
   if [[ $r -ne 0 ]]; then
     _error "Failed to start the firewall."
     return $r
@@ -831,9 +846,9 @@ function main() {
     ;;
   list)
     echo '################ FILTER ################'
-    $IPTABLES --table filter --list --line-numbers --numeric --verbose | sed 's/ \/\*/\t\t\/\*/'
+    $IPTABLES --table filter --list --line-numbers --verbose | sed 's/ \/\*/\t\t\/\*/'
     echo '################ NAT ################'
-    $IPTABLES --table nat --list --line-numbers --numeric --verbose | sed 's/ \/\*/\t\t\/\*/'
+    $IPTABLES --table nat --list --line-numbers --verbose | sed 's/ \/\*/\t\t\/\*/'
     ;;
   restore)
     _echo "Loading firewall rules from ${IPTABLES_BACKUP_FILE}"

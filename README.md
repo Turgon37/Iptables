@@ -52,6 +52,24 @@ RULES
 
 => Comments string is allowed with a sharp as the first caracter.
 
+=> By default rules are inserted with the append method (are push to the end of the chain) if you want to specify this behaviour please specify the method in the begin of each rules like :
+
+```bash
+INPUT="
+APPEND RULES
+INSERT:2 RULES
+INSERT:1 RULES
+"
+```
+  1. `APPEND`
+  
+    The rule will be put after the last rules in the chain
+  
+  2. `INSERT:NUMBER`
+  
+    The rule will be put a the position specified by NUMBER (between 1 to number of rules)
+
+
   * **CHAINS**
     * **RULES**
 
@@ -112,6 +130,13 @@ A list of space separated command whose concerns the same rule. Theses command a
       The TYPE is optionnal and add supplementary match for icmp type
 
   4. MATCH
+    * `tcp:FLAG[,FLAG]:FLAG[,FLAG]`
+      
+      Define a tcp flag match. See the manual for more details
+      
+    * `tcp:syn` of * `tcp:SYN`
+    
+      Define a tcp syn flag match. See the manual for more details
 
     * `state:STATE`    (STATE can be STATE,STATE,STATE ...)
 
