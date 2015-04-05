@@ -28,8 +28,12 @@
 #    +set routing rules by a loop for configuration file
 # version 3.0 : 2015-03-29
 #    +refunding main loop and core processing, full dynamic loading
-#
-readonly VERSION='3.0'
+# version 3.1 : 2015-04-05
+#    +add more matching rules reading
+#    +add security rules with
+#       * anti ddos
+#       * icmp protection
+readonly VERSION='3.1.0'
 #==============================================================================
 INPUT=
 OUTPUT=
@@ -39,19 +43,15 @@ POSTROUTING=
 COMMANDS=
 IS_ROUTER=0
 IS_SECURITY_ENABLED=0
-DDOS_RULES=
 DEFAULT_ACTION=ACCEPT
-TIMEOUT_FOR_TEST=9
+TIMEOUT_FOR_TEST=5
 
 
 #========== INTERNAL OPTIONS ==========#
-#readonly IPTABLES=$(which iptables 2>/dev/null)
-readonly IPTABLES=$(which echo 2>/dev/null)
+readonly IPTABLES=$(which iptables 2>/dev/null)
 readonly IP6TABLES=$(which ip6tables 2>/dev/null)
 
-#readonly IPTABLES_CONFIG=/etc/default/iptables
-readonly IPTABLES_CONFIG=./iptables.conf
-
+readonly IPTABLES_CONFIG=/etc/default/iptables
 readonly IPTABLES_BACKUP_FILE=/etc/iptables.backup
 
 # The key => config separator
@@ -429,12 +429,13 @@ function _load_rules() {
 #                1 if no match is performed
 function _protocol() {
   _debug "  reading protocol entry : $1"
-  
+
   # TCP matching
   if [[ "$1" =~ ^tcp(${C_SEP}${E_REG_RANGE}(${C_SEP}${E_REG_RANGE})?)?$ ]]; then
     _debug "    => proto tcp : $1"
     local src_port=$(expr match "$1" "tcp${C_SEP}${REG_RANGE}")
     local dst_port=$(expr match "$1" "tcp${C_SEP}.+${C_SEP}${REG_RANGE}")
+
     # full port matching (source and destination)
     if [[ -n $src_port && -n $dst_port ]]; then
       src_port="--source-port ${src_port//-/:}"
@@ -444,7 +445,7 @@ function _protocol() {
       dst_port="--destination-port ${src_port//-/:}"
       src_port=
     fi
-    
+
     protocol="--protocol tcp $src_port $dst_port"
     return 0
   # UDP matching
@@ -452,6 +453,7 @@ function _protocol() {
     _debug "    => proto udp : $1"
     local src_port=$(expr match "$1" "udp${C_SEP}${REG_RANGE}")
     local dst_port=$(expr match "$1" "udp${C_SEP}.+${C_SEP}${REG_RANGE}")
+
     # full port matching (source and destination)
     if [[ -n $src_port && -n $dst_port ]]; then
       src_port="--source-port ${src_port//-/:}"
@@ -461,13 +463,14 @@ function _protocol() {
       dst_port="--destination-port ${src_port//-/:}"
       src_port=
     fi
-  
+
     protocol="--protocol udp $src_port $dst_port"
     return 0
   # ICMP matching
   elif [[ "$1" =~ ^icmp(${C_SEP}[-a-zA-Z0-9/]+)?$ ]]; then
     _debug "    => proto icmp : $1"
     local type=$(expr match "$1" ".*${C_SEP}\([-a-zA-Z0-9/]\+\)")
+
     if [[ -n $type ]]; then
       type="--icmp-type $type"
     fi
@@ -492,7 +495,14 @@ function _match() {
     return 0
   elif [[ "$1" =~ ^(c|comment)${C_SEP}[-_a-zA-Z0-9]+$ ]]; then
     _debug "    => match : comment : $1"
-    match='-m comment --comment '$(expr match "$1" '.*${C_SEP}\([-_a-zA-Z0-9]\+\)')
+    match='-m comment --comment '$(expr match "$1" ".*${C_SEP}\([-_a-zA-Z0-9]\+\)")
+    return 0
+  elif [[ "$1" =~ ^(sports|dports|ports)${C_SEP}${E_REG_RANGE}(,${E_REG_RANGE})*$ ]]; then
+    _debug "    => match : multiport : $1"
+    local method=$(expr match "$1" "\(sports\|dports\|ports\)${C_SEP}.*")
+    local port=$(expr match "$1" ".*${C_SEP}\(${REG_RANGE}\(,${REG_RANGE}\)*\)")
+    
+    match="--match multiport --$method ${port//-/:}"
     return 0
   elif [[ "$1" =~ ^tcp${C_SEP}(syn|SYN)$ ]]; then
     _debug "    => match : tcp flag syn: $1"
@@ -537,18 +547,23 @@ function _action() {
 # Provide a module for loading a table with some anti ddos rules
 # @param[string] : the name of the new chain
 # @param[string] : the comma-separated list of chains in which the jump statement must be put
-function _load_sub_chain_rules() {
+# @param[string] OPTIONNAL : the table name in which include new chain
+function _create_chain() {
+  local chain=$1
+  local table=$3
+  if [[ -z $table ]]; then
+    table=filter
+  fi
+  
   # create the new chain
-  _run_command "--table filter --new-chain $1"
+  _run_command "--table filter --new-chain $chain"
   r=$?; if [[ $r -ne 0 ]]; then return $r; fi
   
   # add jump from other chain to the new one
-  for chain in ${2//,/ }; do
-    _run_command "--table filter --insert $chain 1 --jump $1"
+  for ch in ${2//,/ }; do
+    _run_command "--table filter --insert $ch 1 --jump $chain"
     r=$?; if [[ $r -ne 0 ]]; then return $r; fi
   done
-  
-  _load_rules "$1" 
 }
 
 ### ---
@@ -556,10 +571,12 @@ function _load_sub_chain_rules() {
 ### ---
 # This function run specific user defined iptables command to handle iptables option whose are not handled by this script
 # @param[string] : the full command string which contains one command by line
+# @param[string] : a string prefix to put in front of each rules
 # @return[int] : 0 if success
 #                105 a incorrect character have been found in given list of command
 function _run_command() {
-  if [[ "$1" =~ $E_REG_FORBID ]]; then
+  local prefix="$2"
+  if [[ "$1" =~ $E_REG_FORBID || "$prefix" =~ $E_REG_FORBID ]]; then
     _error 'An forbidden character is found'
     return 105
   fi
@@ -576,6 +593,8 @@ function _run_command() {
       continue
     fi
     IFS=$DEFAULT_IFS
+    cmd="$prefix $cmd"
+    _debug "  => command : $cmd"
     $IPTABLES $cmd
     r=$?
     if [[ $r -ne 0 ]]; then
@@ -588,7 +607,32 @@ function _run_command() {
   IFS=$DEFAULT_IFS
 }
 
-
+### ---
+### SECURITY RULES LOADING
+### ---
+# Provide a module for loading a table with some network security rules
+function _load_security_rules() {
+  local forward=
+  if _isTrue $IS_ROUTER; then
+    forward=',FORWARD'
+  fi
+  
+  if _isTrue "$SECURITY_DDOS_RULES"; then
+    _create_chain "DDOS_PROTECT" "INPUT$forward"
+    r=$?; if [[ $r -ne 0 ]]; then return $r; fi
+    
+    _run_command "$DDOS_RULES" "--table filter --append DDOS_PROTECT"
+    r=$?; if [[ $r -ne 0 ]]; then return $r; fi
+  fi
+  
+  if _isTrue "$SECURITY_ICMP_RULES"; then
+    _create_chain "ICMP_PROTECT" "INPUT,OUTPUT$forward"
+    r=$?; if [[ $r -ne 0 ]]; then return $r; fi
+    
+    _run_command "$ICMP_RULES" "--table filter --append ICMP_PROTECT"
+    r=$?; if [[ $r -ne 0 ]]; then return $r; fi
+  fi
+}
 
 ############################
 # Start the Firewall rules #
@@ -602,6 +646,10 @@ function do_start() {
   _flush_chains
   _reset_counters
   _policy 'drop'
+  
+  # MANUAL COMMAND
+  _run_command "$COMMANDS"
+  r=$?; if [[ $r -ne 0 ]]; then return $r; fi
   
   # LOAD MAIN RULES
   _load_rules INPUT "$INPUT"
@@ -626,10 +674,6 @@ function do_start() {
     _load_security_rules
     r=$?; if [[ $r -ne 0 ]]; then return $r; fi
   fi
-  
-  # MANUAL COMMAND
-  _run_command "$COMMANDS"
-  r=$?; if [[ $r -ne 0 ]]; then return $r; fi
 }
 
 ###########################
