@@ -21,6 +21,10 @@ Run the script as root user manually from it location like
 
 Use the `help` command to show the full list of COMMAND
 
+!!!! Use the test command to start the firewall after rules editing.
+It provide a facility to rollback if error cause lost of connection
+
+
 ## Configuration
 
 See the CONFIG.md file for configuration details
