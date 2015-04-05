@@ -118,8 +118,8 @@ function main() {
   cp $PROJECT/iptables.conf $PACKAGE_ROOT/etc/default/$NAME
   chmod 640 $PACKAGE_ROOT/etc/default/$NAME
   # copy service
-  cp $PROJECT/service/iptables.init.d $PACKAGE_ROOT/etc/init.d/$NAME
-  chmod 644 $PACKAGE_ROOT/etc/init.d/$NAME
+  cp $PROJECT/service/iptables.init.d $PACKAGE_ROOT/etc/init.d/iptables
+  chmod 644 $PACKAGE_ROOT/etc/init.d/iptables
 
   # copy executable files
   cp $PROJECT/iptables.sh $PACKAGE_ROOT/usr/sbin/$NAME

@@ -1,8 +1,9 @@
 #!/bin/sh
 
-if [ -x "/etc/init.d/iptables-loader" ]; then
-  update-rc.d iptables-loader defaults >/dev/null
-  invoke-rc.d iptables-loader start || exit $?
+if [ -x "/etc/init.d/iptables" ]; then
+  update-rc.d iptables defaults >/dev/null || exit $?
+  #invoke-rc.d iptables start || exit $?
+  echo 'Start the service with "service iptables start"'
 fi
 
 exit 0

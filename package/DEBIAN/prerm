@@ -1,7 +1,7 @@
 #!/bin/sh
 
-if [ -x "/etc/init.d/iptables-loader" ]; then
-  invoke-rc.d iptables-loader stop || exit $?
+if [ -x "/etc/init.d/iptables" ]; then
+  invoke-rc.d iptables stop || exit $?
 fi
 
 exit 0
