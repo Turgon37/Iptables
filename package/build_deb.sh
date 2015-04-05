@@ -31,7 +31,11 @@ function _error() {
 
 # Check if the script is run by root or not. If not, prompt error and exit
 function _isRunAsRoot() {
-  if [[ -z $SUDO && "$(id -u)" != "0" ]]; then
+  if [[ $(id -u) == "0" ]]; then
+    SUDO=
+    return
+  fi
+  if [[ -z $SUDO ]]; then
     _error "This script must be run as root." 1>&2
     exit 200
   fi
@@ -115,11 +119,11 @@ function main() {
   # SUCH AS cp BINARY FILE AND MAKE SOME CHMOD
 
   # copy configuration
-  cp $PROJECT/iptables.conf $PACKAGE_ROOT/etc/default/$NAME
-  chmod 640 $PACKAGE_ROOT/etc/default/$NAME
+  cp $PROJECT/iptables.conf $PACKAGE_ROOT/etc/default/iptables
+  chmod 640 $PACKAGE_ROOT/etc/default/iptables
   # copy service
   cp $PROJECT/service/iptables.init.d $PACKAGE_ROOT/etc/init.d/iptables
-  chmod 644 $PACKAGE_ROOT/etc/init.d/iptables
+  chmod 755 $PACKAGE_ROOT/etc/init.d/iptables
 
   # copy executable files
   cp $PROJECT/iptables.sh $PACKAGE_ROOT/usr/sbin/$NAME
@@ -134,12 +138,14 @@ function main() {
   echo ' * Building package...'
   if [[ -n $DPKG_DEB ]]; then
     cd deb
-    $DPKG_DEB --build $NAME
-    mv $NAME.deb $NAME_$VERSION.deb
-    echo "  ==> The final package is available in $NAME_$VERSION.deb"
+    $SUDO $DPKG_DEB --build ${NAME}
+    $SUDO mv $NAME.deb ${NAME}_${VERSION}.deb
+    $SUDO chmod 644 ${NAME}_${VERSION}.deb
+    echo "  ==> The final package is available in ${NAME}_${VERSION}.deb"
   else
-    $SUDO tar cfz $NAME.tar.gz $PACKAGE_ROOT
-    echo "  ==> The package tree is available in $NAME.tar.gz"
+    $SUDO tar cfz ${NAME}_${VERSION}.tar.gz $PACKAGE_ROOT
+    $SUDO chmod 644 ${NAME}_${VERSION}.tar.gz
+    echo "  ==> The package tree is available in ${NAME}_${VERSION}.tar.gz"
   fi
 }
 

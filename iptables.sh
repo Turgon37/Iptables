@@ -138,8 +138,9 @@ Return code :
   202   Missing COMMAND in shell args
   203   Missing a system needed program
   204   Unable to load configuration file
-  205   Missing restore fileecho
-  206   'test' command fail, new rules cause a break of connection
+  205   Missing restore file
+  206   Error during restore command
+  207   'test' command fail, new rules cause a break of connection
 "
 }
 
@@ -448,7 +449,7 @@ function _protocol() {
 
     protocol="--protocol tcp $src_port $dst_port"
     return 0
-  # UDP matching
+  # UDP matchingTIMEOUT_FOR_TEST
   elif [[ "$1" =~ ^udp(${C_SEP}${E_REG_RANGE}(${C_SEP}${E_REG_RANGE})?)?$ ]]; then
     _debug "    => proto udp : $1"
     local src_port=$(expr match "$1" "udp${C_SEP}${REG_RANGE}")
@@ -554,11 +555,11 @@ function _create_chain() {
   if [[ -z $table ]]; then
     table=filter
   fi
-  
+
   # create the new chain
   _run_command "--table filter --new-chain $chain"
   r=$?; if [[ $r -ne 0 ]]; then return $r; fi
-  
+
   # add jump from other chain to the new one
   for ch in ${2//,/ }; do
     _run_command "--table filter --insert $ch 1 --jump $chain"
@@ -616,7 +617,7 @@ function _load_security_rules() {
   if _isTrue $IS_ROUTER; then
     forward=',FORWARD'
   fi
-  
+
   if _isTrue "$SECURITY_DDOS_RULES"; then
     _create_chain "DDOS_PROTECT" "INPUT$forward"
     r=$?; if [[ $r -ne 0 ]]; then return $r; fi
@@ -624,7 +625,7 @@ function _load_security_rules() {
     _run_command "$DDOS_RULES" "--table filter --append DDOS_PROTECT"
     r=$?; if [[ $r -ne 0 ]]; then return $r; fi
   fi
-  
+
   if _isTrue "$SECURITY_ICMP_RULES"; then
     _create_chain "ICMP_PROTECT" "INPUT,OUTPUT$forward"
     r=$?; if [[ $r -ne 0 ]]; then return $r; fi
@@ -646,7 +647,7 @@ function do_start() {
   _flush_chains
   _reset_counters
   _policy 'drop'
-  
+
   # MANUAL COMMAND
   _run_command "$COMMANDS"
   r=$?; if [[ $r -ne 0 ]]; then return $r; fi
@@ -656,7 +657,7 @@ function do_start() {
   r=$?; if [[ $r -ne 0 ]]; then return $r; fi
   _load_rules OUTPUT "$OUTPUT"
   r=$?; if [[ $r -ne 0 ]]; then return $r; fi
-  
+
   # ROUTING RULES
   if _isTrue $IS_ROUTER; then
     _load_rules PREROUTING "$PREROUTING" nat
@@ -668,7 +669,7 @@ function do_start() {
     _load_rules POSTROUTING "$POSTROUTING" nat
     r=$?; if [[ $r -ne 0 ]]; then return $r; fi
   fi
-  
+
   # SECURITY RULES
   if _isTrue "$IS_SECURITY_ENABLED"; then
     _load_security_rules
@@ -711,7 +712,6 @@ function do_restart() {
   fi
 }
 
-
 #########################
 # Rules storage section #
 #########################
@@ -721,7 +721,7 @@ function do_restart() {
 #			203 if save command is not found
 function do_save() {
   local file="$1"
-  
+
   if [[ -z "$file" ]]; then
     file=${IPTABLES_BACKUP_FILE}
   fi
@@ -737,6 +737,8 @@ function do_save() {
 # return :	x	the restore command return status
 #			203 if restore command is not found
 #			204 restore file is not found
+#     205 if restore file is not found
+#     206 if restore command fail
 function do_restore() {
   IPTABLES_RESTORE=$(which iptables-restore 2>/dev/null)
   if [[ -z "${IPTABLES_RESTORE}" ]]; then
@@ -745,10 +747,13 @@ function do_restore() {
   fi
   if [[ -r "${IPTABLES_BACKUP_FILE}" ]]; then
     ${IPTABLES_RESTORE} < ${IPTABLES_BACKUP_FILE}
-    return 204
+    if [[ $? -ne 0 ]]; then
+      return 206
+    fi
+  else
+    return 205
   fi
 }
-
 
 ###########################
 # Test the Firewall rules #
@@ -756,45 +761,60 @@ function do_restore() {
 # Apply new firewall rules and wait for an user confirmation before saving them
 # return :	0 if rules have been correctly set
 #           106 if TIMEOUT is not a integer
-#			      X other error codes 
+#           207 if general test fail
 function do_test() {
   local r
   local input
-  
-  if [[ $TIMEOUT_FOR_TEST =~ ^[0-9]+$ ]]; then
-    _error 'Incorrect numeric value for TIMEOUT_FOR_TEST option'
+
+  if [[ ! $TIMEOUT_FOR_TEST =~ ^[0-9]+$ ]]; then
+    _error "Incorrect numeric value : $TIMEOUT_FOR_TEST given for test timeout"
     return 106
   fi
-  
-  echo 'Saving current firewall rules'
+
+  echo ' * Saving current firewall rules'
   do_save
-  r$=?
+  r=$?
   if [[ $r -ne 0 ]]; then
     _error 'Unable to save current rules'
     return $r
   fi
 
-  echo 'WARNING : Be careful that the caracters are put to screen after you typed them to ensure a bi-directionnal communication'
-  echo "WARNING : Previous configuration will be restore in ${TIMEOUT_FOR_TEST} seconds if no action is performed. Type 'OK' apply new rules [wait for ${TIMEOUT_FOR_TEST}s]"
-  echo 'Testing and applying new rules'
+  echo 'You have to confirm that the new rules are being set safety'
+  echo 'To do that it will be ask you to type a confirm keyword otherwise old rules will be restored'
+  echo
+  echo 'WARNING : Be careful that the caracters are written to the screen after you have typed them to ensure a bi-directionnal communication'
+  echo "WARNING : Previous configuration will be restore in ${TIMEOUT_FOR_TEST} seconds if no action is performed."
+  echo
+  echo 'After typing the word "start" (with correct case) the new rules are going to be tested'
+  
+  while [[ $input != start ]]; do
+    read -n 5 input
+    if [[ $input != start ]]; then
+      echo 'Please carrefully read the message above and try again...'
+    fi
+  done
+  
+  echo ' * Testing new rules...'
+  echo "Type 'ok' (ignore case) to apply new rules [wait for ${TIMEOUT_FOR_TEST}s]"
   do_restart
 
   read -t "${TIMEOUT_FOR_TEST}" -n 2 input
   if [[ "$input" =~ ^(o|O)(k|K)$ ]]; then 
-    echo 'Saving new rules'
+    echo ' * Applying new rules'
   else
     local debug_file="/tmp/iptables_$(date +%Y-%m-%d_%H-%M)"
     do_save "$debug_file"
-    echo 'WARNING : A snapshot of the new firewall rules have been save to $debug_file'
+    echo ' * Rollback old rules'
+    echo "WARNING : A snapshot of the new firewall rules have been save to $debug_file"
     do_restore
-    r$=?
+    r=$?
     if [[ $r -ne 0 ]]; then
       _error 'Unable to restore current rules'
       return $r
     fi
-    
+
     _error 'Old rules have been restored'
-    return 206
+    return 207
   fi
 }
 
@@ -913,7 +933,7 @@ function main() {
     esac
     ;;
   test)
-    _echo "Testing new firewall rulesets"
+    _echo "Testing new firewall ruleset"
     do_test
     r=$?
     case "$r" in

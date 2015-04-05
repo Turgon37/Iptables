@@ -1,2 +1,2 @@
-/etc/default/iptables-loader
+/etc/default/iptables
 /etc/init.d/iptables

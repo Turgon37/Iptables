@@ -25,7 +25,7 @@ DAEMON_ARGS=""
 [ -r /etc/default/$NAME ] && . /etc/default/$NAME
 
 # Load the VERBOSE setting and other rcS variables
-. /lib/init/vars.sh
+#. /lib/init/vars.sh
 
 # Define LSB log_* functions.
 # Depend on lsb-base (>= 3.2-14) to ensure that this file is present
@@ -38,11 +38,11 @@ DAEMON_ARGS=""
 ###########################
 # Check process status and restart it if it is running
 # @param[string] : list of process to restart
-function restartProcess() {
+restartProcess() {
   for process in $1; do
     # Check process status
-    log_daemon_msg "trying to restart $process"
-    
+    log_daemon_msg "Trying to restart" "$process"
+
     # init.d service
     if [ -x /etc/init.d/$process ]; then
       # get the current process status
@@ -50,86 +50,97 @@ function restartProcess() {
       if [ $? -eq 0 ]; then
         # restart the process if it is running
         /etc/init.d/$process restart 2>/dev/null 1>&2
-        if [ $? -ne 0 ]; then
-          # return error if the process can't be restarted
-          echo "Process $process hasn't been restarted." 1>&2
+        if [ $? -eq 0 ]; then
+          # success
+          log_end_msg 0
+          log_success_msg " => service have successfully been restarted"
         else
-          echo "$process has been restarted."
+          # return error if the process can't be restarted
+          log_end_msg 1
+          log_success_msg " => an error happen during service restarting"
         fi
+      else
+        log_end_msg 0
+        log_success_msg " => service was not running"
       fi
+    # no service found
+    else
+      log_end_msg 0
+      log_success_msg " => service not found"
     fi
   done
 }
 
 
-
 case "$1" in
   start)
     [ "$VERBOSE" != no ] && log_daemon_msg "Setting firewall rules. Enable firewall secure policy" "$NAME"
+    # send start command to main script
     $DAEMON start
-    case $? in
+    r=$?
+    case $r in
       0) [ "$VERBOSE" != no ] && log_end_msg 0;;
       *)
         if [ "$VERBOSE" != no ]; then
           log_end_msg 1
           log_failure_msg "$DESC: Failed to start the firewall."
+          log_failure_msg "Use $DAEMON help to see the signification of error code : $r"
         fi
       ;;
     esac
   ;;
   stop)
     [ "$VERBOSE" != no ] && log_daemon_msg "Removing firewall rules. Turn firewall to open policy" "$NAME"
+    # send stop command to main script
     $DAEMON stop
-    case $? in
+    r=$?
+    case $r in
       0) [ "$VERBOSE" != no ] && log_end_msg 0;;
       *)
         if [ "$VERBOSE" != no ]; then
           log_end_msg 1
-          log_failure_msg "$DESC: Failed to start the firewall."
+          log_failure_msg "$DESC: Failed to stop the firewall."
+          log_failure_msg "Use $DAEMON help to see the signification of error code : $r"
         fi
       ;;
     esac
   ;;
   restart|force-reload)
     log_daemon_msg "Re-setting firewall rules" "$NAME"
+    # send restart command to main script
     $DAEMON restart
-    case $? in
+    r=$?
+    case $r in
       # restart success
       0)
         log_end_msg 0
         # trying to restart some depends process
-        restartProcess "$SERVICES";;
-      # start failed
-      *) log_end_msg 1
-        log_failure_msg "$DESC: Failed to restart the firewall."
+        restartProcess "$SERVICES"  
       ;;
-    esac
-  ;;
-  restore)
-    log_daemon_msg "Loading firewall rules from backup file" "$NAME"
-    $DAEMON restore
-    case "$?" in
-    0) log_end_msg 0 ;;
-    *) log_end_msg 1 ;;
-    esac
-  ;;
-  save)
-    log_daemon_msg "Saving firewall rules to backup file" "$NAME"
-    $DAEMON save
-    case "$?" in
-    0) log_end_msg 0 ;;
-    *) log_end_msg 1 ;;
+      # start failed
+      *)
+        log_end_msg 1
+        log_failure_msg "$DESC: Failed to restart the firewall."
+        log_failure_msg "Use $DAEMON help to see the signification of error code : $r"
+      ;;
     esac
   ;;
   test)
     log_action_msg "Testing new firewall rulesets" "$NAME"
     $DAEMON test
+    r=$?
+    case "$r" in
+      0)
+        log_success_msg "New rules successfully applied"
+        # trying to restart some depends process
+        restartProcess "$SERVICES"
+      ;;
+      *) log_failure_msg "Use '$DAEMON help' to see the signification of error code : $r"
+      ;;
+    esac
   ;;
-  help)
-    $DAEMON help
-  ;; 
   *)
-    echo "Usage: $SCRIPTNAME {start|stop|restart|force-reload|save|restore|help|test}" >&2
+    echo "Usage: $SCRIPTNAME {start|stop|restart|force-reload|test}" >&2
     exit 3
   ;;
 esac
