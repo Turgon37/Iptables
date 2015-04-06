@@ -790,17 +790,17 @@ function do_test() {
   while [[ $input != start ]]; do
     read -n 5 input
     if [[ $input != start ]]; then
-      echo 'Please carrefully read the message above and try again...'
+      echo -e '\nPlease carrefully read the message above and try again...'
     fi
   done
   
-  echo ' * Testing new rules...'
+  echo -e '\n * Testing new rules...'
   echo "Type 'ok' (ignore case) to apply new rules [wait for ${TIMEOUT_FOR_TEST}s]"
   do_restart
 
   read -t "${TIMEOUT_FOR_TEST}" -n 2 input
   if [[ "$input" =~ ^(o|O)(k|K)$ ]]; then 
-    echo ' * Applying new rules'
+    echo -e '\n * Applying new rules'
   else
     local debug_file="/tmp/iptables_$(date +%Y-%m-%d_%H-%M)"
     do_save "$debug_file"
