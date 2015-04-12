@@ -8,32 +8,10 @@
 #usage_info    :use command 'help'
 #options       :debug
 #notes         :
-# During the development process, please take a real care to report all errors,
-# and don't worry about using debug option to control the good running of the
-# script
-#versions_notes:
-# version 1.0
-#    +first release
-# version 2.0 : 2014-09-23
-#    +re parsing of all rules
-#    -remove return_state variables
-#    +fix iptables error
-# version 2.1 : 2014-09-24
-#    +add missing _do_restart function
-#    +correct functions syntax
-#    +fix bug of test function
-#    +add a verbose warning message
-# version 2.2 : 2014-10-26
-#    +add a new configuration file /etc/default/iptables
-#    +set routing rules by a loop for configuration file
-# version 3.0 : 2015-03-29
-#    +refunding main loop and core processing, full dynamic loading
-# version 3.1 : 2015-04-05
-#    +add more matching rules reading
-#    +add security rules with
-#       * anti ddos
-#       * icmp protection
-readonly VERSION='3.1.0'
+# This script is currently under development, please take a real care to report 
+# all errors, and don't worry about using debug option to control the good 
+#  running of the script
+readonly VERSION='3.1.1'
 #==============================================================================
 INPUT=
 OUTPUT=
@@ -75,7 +53,7 @@ readonly E_REG_IFACE='([a-zA-Z*][a-zA-Z0-9*]*\+?)'
 
 # REGEX that describe a network ipv4 address
 readonly REG_IPV4='\(\(\([0-9]\|[1-9][0-9]\|1[0-9]\{2\}\|2[0-4][0-9]\|25[0-5]\).\)\{3\}\([0-9]\|[1-9][0-9]\|1[0-9]\{2\}\|2[0-4][0-9]\|25[0-5]\)\(/\([0-9]\|[12][0-9]\|3[0-2]\)\)\?\)'
-readonly E_REG_IPV4='((([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5]).){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])(\/([0-9]|[12][0-9]|3[0-2]))?)'
+readonly E_REG_IPV4='((([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])(\/([0-9]|[12][0-9]|3[0-2]))?)'
 
 # REGEX that describe a port number (between 1 and 65535)
 readonly REG_PORT='\([0-9]\{1,4\}\|[1-5][0-9]\{4\}\|6[0-4][0-9]\{3\}\|65[0-4][0-9]\{2\}\|655[0-2][0-9]\|6553[0-5]\)'

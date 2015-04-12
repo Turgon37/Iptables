@@ -1,0 +1,60 @@
+iptables-loader (3.1.1) wheezy; urgency=low
+
+  * Fix dot matching in IPV4 regex
+
+ -- Pierre GINDRAUD <pgindraud@gmail.com> Sun, 12 Apr 17:59:04 CEST 2015
+
+iptables-loader (3.1.0) wheezy; urgency=low
+
+  * Add new shortlink for common iptables command
+  * Security
+    +add security rules with new sub chains
+    +add an anti ddos chain
+    +add icmp protection chain
+
+ -- Pierre GINDRAUD <pgindraud@gmail.com> Sun, 05 Apr 17:42:04 CEST 2015
+
+iptables-loader (3.0.0) wheezy; urgency=low
+
+  * Rewrite entire script
+    +Add all base action like a system service, start, stop, restart
+    +Refund the entire script core to load all rules in for loop
+       and provide a retrieving of iptables command return code
+    +Handle all iptables error
+    +Rewrite the restart function to prevent user from connection ban by
+      bad firewall rules
+
+ -- Pierre GINDRAUD <pgindraud@gmail.com> Sun, 29 Mar 10:14:05 CEST 2015
+
+iptables-loader (2.2.0) wheezy; urgency=low
+
+  * Put all FORWARD rules in a new configuration file
+    +add a new configuration file /etc/default/iptables
+    +set FORWARD rules by a loop on a parameter from new configuration file
+
+ -- Pierre GINDRAUD <pgindraud@gmail.com> Sun, 26 Oct 18:45:25 CEST 2014
+
+iptables-loader (2.1.0) wheezy; urgency=low
+
+  * Add new action function do_restart
+    +add missing _do_restart function
+    +correct functions syntax
+    +fix bug of test function
+    +add a verbose warning message
+
+ -- Pierre GINDRAUD <pgindraud@gmail.com> Wed, 24 Sept 20:00:50 CEST 2014
+
+iptables-loader (2.0.0) wheezy; urgency=low
+
+  * Edit all rules loading function
+    +re parsing of all rules function
+    -remove return_state variables for all iptables command call
+    +fix some error in bash syntax
+
+ -- Pierre GINDRAUD <pgindraud@gmail.com> Tue, 23 Sept 16:13:02 CEST 2014
+
+iptables-loader (1.0.0) wheezy; urgency=low
+  
+  * first release
+  
+ -- Pierre GINDRAUD <pgindraud@gmail.com> Fry, 30 May 15:20:35 CEST 2014

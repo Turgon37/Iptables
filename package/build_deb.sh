@@ -17,9 +17,12 @@ SUDO=$(which sudo 2>/dev/null)
 
 #========== INTERNAL VARIABLES ==========#
 PACKAGE_ROOT=deb/$NAME
+PACKAGE_DOC=$PACKAGE_ROOT/usr/share/doc/$NAME/
 PROJECT=..
 VERSION=$(grep '--ignore-case' 'version' DEBIAN/control | grep -Eo '[0-9]+(\.[0-9]+)+')
+ARCH=$(grep '--ignore-case' 'architecture' DEBIAN/control | cut -d : -f 2- | grep -Eo '[a-ZA-Z]+')
 
+ARCHIVE=${NAME}_${VERSION}_${ARCH}
 
 #========== INTERNAL FUNCTIONS ==========#
 
@@ -41,17 +44,24 @@ function _isRunAsRoot() {
   fi
 }
 
-function buildTree() {
+function buildPackageTree() {
   echo ' * Building package tree...'
   if [[ ! -d deb ]]; then
     echo '    => Make the deb directory'
-    mkdir deb
+    mkdir -p $PACKAGE_ROOT
     echo '    => Create the full classic debian package tree'
-    mkdir -p deb/$NAME/DEBIAN/
-    mkdir -p deb/$NAME/etc/default/
-    mkdir -p deb/$NAME/etc/init.d/
-    mkdir -p deb/$NAME/usr/sbin
-    #mkdir -p deb/$NAME/usr/bin
+    mkdir -p $PACKAGE_ROOT/DEBIAN/
+    
+    mkdir -p $PACKAGE_ROOT/etc/default/
+    mkdir -p $PACKAGE_ROOT/etc/init.d/
+    
+    mkdir -p $PACKAGE_ROOT/usr/sbin
+    #mkdir -p $PACKAGE_ROOT/usr/bin
+    mkdir -p $PACKAGE_DOC
+    mkdir -p $PACKAGE_DOC/examples
+    
+    #mkdir -p $PACKAGE_ROOT/var/run
+    
     chmod -R 755 $PACKAGE_ROOT/*
   else
     echo ' # Deb directory already exists'
@@ -59,7 +69,7 @@ function buildTree() {
   fi
 }
 
-function copyFile() {
+function installDebianFiles() {
   echo ' * Copying main files...'
   if [[ -d deb ]]; then
     echo '    => Copy package description files'
@@ -70,6 +80,7 @@ function copyFile() {
     chmod -R 644 $PACKAGE_ROOT/DEBIAN/c*
   else
     echo ' # Deb directory does not exists'
+    exit 1
   fi
 }
 
@@ -110,8 +121,10 @@ function main() {
   ### MAIN RUNNING
   umask 022
   
-  buildTree
-  copyFile
+  echo ' * Applying package building rules...'
+  buildPackageTree
+  cp $PROJECT/LICENCE $PACKAGE_ROOT/DEBIAN/copyright
+  installDebianFiles
   
   
   echo ' * Applying user building rules...'
@@ -121,6 +134,12 @@ function main() {
   # copy configuration
   cp $PROJECT/iptables.conf $PACKAGE_ROOT/etc/default/iptables
   chmod 640 $PACKAGE_ROOT/etc/default/iptables
+  
+  # copy docs
+  cp $PROJECT/iptables.conf $PACKAGE_DOC/examples/iptables.conf
+  cp DEBIAN/changelog $PACKAGE_DOC/
+  cp $PROJECT/README.md $PACKAGE_DOC/
+  cp $PROJECT/LICENCE $PACKAGE_DOC/copyright
   # copy service
   cp $PROJECT/service/iptables.init.d $PACKAGE_ROOT/etc/init.d/iptables
   chmod 755 $PACKAGE_ROOT/etc/init.d/iptables
@@ -139,13 +158,13 @@ function main() {
   if [[ -n $DPKG_DEB ]]; then
     cd deb
     $SUDO $DPKG_DEB --build ${NAME}
-    $SUDO mv $NAME.deb ${NAME}_${VERSION}.deb
-    $SUDO chmod 644 ${NAME}_${VERSION}.deb
-    echo "  ==> The final package is available in ${NAME}_${VERSION}.deb"
+    $SUDO mv $NAME.deb ${ARCHIVE}.deb
+    $SUDO chmod 644 ${ARCHIVE}.deb
+    echo "  ==> The final package is available in ${ARCHIVE}.deb"
   else
-    $SUDO tar cfz ${NAME}_${VERSION}.tar.gz $PACKAGE_ROOT
-    $SUDO chmod 644 ${NAME}_${VERSION}.tar.gz
-    echo "  ==> The package tree is available in ${NAME}_${VERSION}.tar.gz"
+    $SUDO tar cfz ${ARCHIVE}.tar.gz $PACKAGE_ROOT
+    $SUDO chmod 644 ${ARCHIVE}.tar.gz
+    echo "  ==> The package tree is available in ${ARCHIVE}.tar.gz"
   fi
 }
 
