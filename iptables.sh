@@ -11,14 +11,15 @@
 # This script is currently under development, please take a real care to report 
 # all errors, and don't worry about using debug option to control the good 
 #  running of the script
-readonly VERSION='3.1.1'
+readonly VERSION='3.2.1'
 #==============================================================================
 INPUT=
 OUTPUT=
 FORWARD=
 PREROUTING=
 POSTROUTING=
-COMMANDS=
+PRE_COMMANDS=
+POST_COMMANDS=
 IS_ROUTER=0
 IS_SECURITY_ENABLED=0
 DEFAULT_ACTION=ACCEPT
@@ -49,30 +50,30 @@ readonly E_REG_FORBID='(\;)'
 
 # REGEX that describe a IFACE name
 readonly REG_IFACE='\([a-zA-Z*][a-zA-Z0-9*]*+\?\)'
-readonly E_REG_IFACE='([a-zA-Z*][a-zA-Z0-9*]*\+?)'
+readonly REG_E_IFACE='([a-zA-Z*][a-zA-Z0-9*]*\+?)'
 
 # REGEX that describe a network ipv4 address
 readonly REG_IPV4='\(\(\([0-9]\|[1-9][0-9]\|1[0-9]\{2\}\|2[0-4][0-9]\|25[0-5]\).\)\{3\}\([0-9]\|[1-9][0-9]\|1[0-9]\{2\}\|2[0-4][0-9]\|25[0-5]\)\(/\([0-9]\|[12][0-9]\|3[0-2]\)\)\?\)'
-readonly E_REG_IPV4='((([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])(\/([0-9]|[12][0-9]|3[0-2]))?)'
+readonly REG_E_IPV4='((([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])(\/([0-9]|[12][0-9]|3[0-2]))?)'
 
 # REGEX that describe a port number (between 1 and 65535)
 readonly REG_PORT='\([0-9]\{1,4\}\|[1-5][0-9]\{4\}\|6[0-4][0-9]\{3\}\|65[0-4][0-9]\{2\}\|655[0-2][0-9]\|6553[0-5]\)'
-readonly E_REG_PORT='([0-9]{1,4}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5])'
+readonly REG_E_PORT='([0-9]{1,4}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5])'
 
 # REGEX that describe a port range like PORT-PORT (use this for port matching)
 readonly REG_RANGE="\(${REG_PORT}\(-${REG_PORT}\)\?\)"
-readonly E_REG_RANGE="(${E_REG_PORT}(-${E_REG_PORT})?)"
+readonly REG_E_RANGE="(${REG_E_PORT}(-${REG_E_PORT})?)"
 
 # REGEX that qualify a network which has a gateway
-readonly E_REG_GW="(${C_SEP}gw)"
+readonly REG_E_GW="(${C_SEP}gw)"
 
 #REGEX that describe a connection state
-readonly E_REG_STATE="(INVALID|ESTABLISHED|NEW|RELATED|UNTRACKED)"
 readonly REG_STATE="\(INVALID\|ESTABLISHED\|NEW\|RELATED\|UNTRACKED\)"
+readonly REG_E_STATE="(INVALID|ESTABLISHED|NEW|RELATED|UNTRACKED)"
 
 # REGEX that describe a TCP flag
-readonly E_REG_FLAG="(SYN|ACK|FIN|RST|URG|PSH|ALL|NONE)"
 readonly REG_FLAG="\(SYN\|ACK\|FIN\|RST\|URG\|PSH\|ALL\|NONE\)"
+readonly REG_E_FLAG="(SYN|ACK|FIN|RST|URG|PSH|ALL|NONE)"
 
 #========== INTERNAL FUNCTIONS ==========#
 
@@ -126,7 +127,7 @@ Return code :
 # @param[string] : the msg to write in stdout
 function _echo() {
   if [[ $IS_VERBOSE -eq 1 ]]; then
-    echo -e "$@"
+    echo -e "$*"
   fi
 }
 
@@ -134,7 +135,7 @@ function _echo() {
 # @param[string] : the msg to write in stderr
 function _error() {
   if [[ $IS_VERBOSE -eq 1 ]]; then
-    echo -e "Error : $@" 1>&2
+    echo -e "Error : $*" 1>&2
   fi
 }
 
@@ -142,7 +143,7 @@ function _error() {
 # @param[string] : the msg to write in stdout
 function _debug() {
   if [[ $IS_DEBUG -eq 1 ]]; then
-    echo -e "debug: $@"
+    echo -e "debug: $*"
   fi
 }
 
@@ -186,7 +187,7 @@ function parseIface() {
 # Return the list of availables interfaces
 # @return[string] : the list of availables interfaces
 function ifacesList() {
-  ip link show | awk -F': ' '/^[0-9]*:/{print $2}' | awk -F'\n' '{if ($1 ~ /'$E_REG_IFACE'/) print $1}'
+  ip link show | awk -F': ' '/^[0-9]*:/{print $2}' | awk -F'\n' '{if ($1 ~ /'$REG_E_IFACE'/) print $1}'
 }
 
 ### ---
@@ -302,11 +303,13 @@ function _load_rules() {
         add_method="--append $1"
       elif [[ "$c" =~ ^INSERT${C_SEP}[1-9]+$ ]]; then
         _debug "  => add method : $c"
-        local number=$(expr match "$c" ".*:\([1-9]\+\)")
+        local number
+        
+        number=$(expr match "$c" ".*:\([1-9]\+\)")
         if [[ -n $number ]]; then
           add_method="--insert $1 $number"
         fi
-      elif [[ "$c" =~ ^(s|src)${C_SEP}${E_REG_IPV4}$ ]]; then
+      elif [[ "$c" =~ ^(s|src)${C_SEP}${REG_E_IPV4}$ ]]; then
         _debug "  => src addr : $c"
         src_address=$(parseAddress4 "$c" '.*'${C_SEP})
         if [[ -n $src_address && $src_address != '*' ]]; then
@@ -315,7 +318,7 @@ function _load_rules() {
           src_address=
         fi
       # DESTINATION ADDRESS matching
-      elif [[ "$c" =~ ^(d|dst)${C_SEP}${E_REG_IPV4}$ ]]; then
+      elif [[ "$c" =~ ^(d|dst)${C_SEP}${REG_E_IPV4}$ ]]; then
         _debug "  => dst addr : $c"
         dst_address=$(parseAddress4 "$c" '.*'${C_SEP})
         if [[ -n $dst_address && $dst_address != '*' ]]; then
@@ -333,7 +336,7 @@ function _load_rules() {
       elif _action "$c"; then
         action_opt="$action_opt $action"
       # SINGLE INTERFACE matching
-      elif [[ "$c" =~ ^${E_REG_IFACE}$ ]]; then
+      elif [[ "$c" =~ ^${REG_E_IFACE}$ ]]; then
         _debug "  => iface : $c"
         # interface
         iface=$(parseIface "$c")
@@ -353,7 +356,7 @@ function _load_rules() {
         fi
       
       # IN/OUT INTERFACE matching
-      elif [[ "$c" =~ ^${E_REG_IFACE}${C_SEP}${E_REG_IFACE}$ ]]; then
+      elif [[ "$c" =~ ^${REG_E_IFACE}${C_SEP}${REG_E_IFACE}$ ]]; then
         _debug "  => iface+iface : $c"
         
         # input interface
@@ -410,11 +413,13 @@ function _protocol() {
   _debug "  reading protocol entry : $1"
 
   # TCP matching
-  if [[ "$1" =~ ^tcp(${C_SEP}${E_REG_RANGE}(${C_SEP}${E_REG_RANGE})?)?$ ]]; then
+  if [[ "$1" =~ ^tcp(${C_SEP}${REG_E_RANGE}(${C_SEP}${REG_E_RANGE})?)?$ ]]; then
     _debug "    => proto tcp : $1"
-    local src_port=$(expr match "$1" "tcp${C_SEP}${REG_RANGE}")
-    local dst_port=$(expr match "$1" "tcp${C_SEP}.+${C_SEP}${REG_RANGE}")
-
+    local src_port
+    local dst_port
+    
+    dst_port=$(expr match "$1" "tcp${C_SEP}.+${C_SEP}${REG_RANGE}")
+    src_port=$(expr match "$1" "tcp${C_SEP}${REG_RANGE}")
     # full port matching (source and destination)
     if [[ -n $src_port && -n $dst_port ]]; then
       src_port="--source-port ${src_port//-/:}"
@@ -428,11 +433,13 @@ function _protocol() {
     protocol="--protocol tcp $src_port $dst_port"
     return 0
   # UDP matchingTIMEOUT_FOR_TEST
-  elif [[ "$1" =~ ^udp(${C_SEP}${E_REG_RANGE}(${C_SEP}${E_REG_RANGE})?)?$ ]]; then
+  elif [[ "$1" =~ ^udp(${C_SEP}${REG_E_RANGE}(${C_SEP}${REG_E_RANGE})?)?$ ]]; then
     _debug "    => proto udp : $1"
-    local src_port=$(expr match "$1" "udp${C_SEP}${REG_RANGE}")
-    local dst_port=$(expr match "$1" "udp${C_SEP}.+${C_SEP}${REG_RANGE}")
+    local src_port
+    local dst_port
 
+    src_port=$(expr match "$1" "udp${C_SEP}${REG_RANGE}")
+    dst_port=$(expr match "$1" "udp${C_SEP}.+${C_SEP}${REG_RANGE}")
     # full port matching (source and destination)
     if [[ -n $src_port && -n $dst_port ]]; then
       src_port="--source-port ${src_port//-/:}"
@@ -468,7 +475,7 @@ function _protocol() {
 function _match() {
   _debug "  reading matching entry : $1"
 
-  if [[ "$1" =~ ^state${C_SEP}${E_REG_STATE}(,${E_REG_STATE})*$ ]]; then
+  if [[ "$1" =~ ^state${C_SEP}${REG_E_STATE}(,${REG_E_STATE})*$ ]]; then
     _debug "    => match : state : $1"
     match='-m state --state '$(expr match "$1" "state${C_SEP}\($REG_STATE\(,$REG_STATE\)*\)")
     return 0
@@ -476,10 +483,12 @@ function _match() {
     _debug "    => match : comment : $1"
     match='-m comment --comment '$(expr match "$1" ".*${C_SEP}\([-_a-zA-Z0-9]\+\)")
     return 0
-  elif [[ "$1" =~ ^(sports|dports|ports)${C_SEP}${E_REG_RANGE}(,${E_REG_RANGE})*$ ]]; then
+  elif [[ "$1" =~ ^(sports|dports|ports)${C_SEP}${REG_E_RANGE}(,${REG_E_RANGE})*$ ]]; then
     _debug "    => match : multiport : $1"
-    local method=$(expr match "$1" "\(sports\|dports\|ports\)${C_SEP}.*")
-    local port=$(expr match "$1" ".*${C_SEP}\(${REG_RANGE}\(,${REG_RANGE}\)*\)")
+    local method
+    local port
+    method=$(expr match "$1" "\(sports\|dports\|ports\)${C_SEP}.*")
+    port=$(expr match "$1" ".*${C_SEP}\(${REG_RANGE}\(,${REG_RANGE}\)*\)")
     
     match="--match multiport --$method ${port//-/:}"
     return 0
@@ -487,7 +496,7 @@ function _match() {
     _debug "    => match : tcp flag syn: $1"
     match='--syn'
     return 0
-  elif [[ "$1" =~ ^tcp${C_SEP}${E_REG_FLAG}(,${E_REG_FLAG})*${C_SEP}${E_REG_FLAG}(,${E_REG_FLAG})*$ ]]; then
+  elif [[ "$1" =~ ^tcp${C_SEP}${REG_E_FLAG}(,${REG_E_FLAG})*${C_SEP}${REG_E_FLAG}(,${REG_E_FLAG})*$ ]]; then
     _debug "    => match : tcp flag : $1"
     match='--tcp-flags '$(expr match "$1" "tcp${C_SEP}\($REG_FLAG\(,$REG_FLAG\)*\)")' '$(expr match "$1" "tcp${C_SEP}.*${C_SEP}\($REG_FLAG\(,$REG_FLAG\)*\)")
     return 0
@@ -626,8 +635,8 @@ function do_start() {
   _reset_counters
   _policy 'drop'
 
-  # MANUAL COMMAND
-  _run_command "$COMMANDS"
+  # MANUAL PRE COMMAND
+  _run_command "$PRE_COMMANDS"
   r=$?; if [[ $r -ne 0 ]]; then return $r; fi
   
   # LOAD MAIN RULES
@@ -647,6 +656,10 @@ function do_start() {
     _load_rules POSTROUTING "$POSTROUTING" nat
     r=$?; if [[ $r -ne 0 ]]; then return $r; fi
   fi
+  
+  # MANUAL COMMAND
+  _run_command "$POST_COMMANDS"
+  r=$?; if [[ $r -ne 0 ]]; then return $r; fi
 
   # SECURITY RULES
   if _isTrue "$IS_SECURITY_ENABLED"; then
@@ -780,7 +793,9 @@ function do_test() {
   if [[ "$input" =~ ^(o|O)(k|K)$ ]]; then 
     echo -e '\n * Applying new rules'
   else
-    local debug_file="/tmp/iptables_$(date +%Y-%m-%d_%H-%M)"
+    local debug_file
+    
+    debug_file="/tmp/iptables_$(date +%Y-%m-%d_%H-%M)"
     do_save "$debug_file"
     echo ' * Rollback old rules'
     echo "WARNING : A snapshot of the new firewall rules have been save to $debug_file"
@@ -807,7 +822,7 @@ function main() {
   _isRunAsRoot
   
   ### ARGUMENTS PARSING  
-  for i in `seq $(($#+1))`; do
+  for i in $(seq $(($#+1))); do
     #catch main arguments
     case $1 in
     -v|--verbose) IS_VERBOSE=1;;

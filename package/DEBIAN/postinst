@@ -1,7 +1,7 @@
 #!/bin/sh
 
 if [ -x "/etc/init.d/iptables" ]; then
-  echo 'Add Remove service boot configuration'
+  echo 'Add service boot configuration'
   update-rc.d iptables defaults >/dev/null || exit $?
   #invoke-rc.d iptables start || exit $?
   echo '####          README          ####'

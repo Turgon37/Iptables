@@ -1,3 +1,10 @@
+iptables-loader (3.2.1) wheezy; urgency=low
+
+  * Separate COMMAND into PRE and POST command
+    +this feature allow more flexible behaviour
+
+ -- Pierre GINDRAUD <pgindraud@gmail.com> Sun, 26 Apr 15:30:00 CEST 2015
+
 iptables-loader (3.1.1) wheezy; urgency=low
 
   * Fix dot matching in IPV4 regex
