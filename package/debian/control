@@ -1,0 +1,17 @@
+Source: iptables-loader
+Section: net
+Priority: optional
+Maintainer: Pierre GINDRAUD <pgindraud@gmail.com>
+Build-Depends: debhelper (>= 9)
+Standards-Version: 3.9.6
+Homepage: https://github.com/EngineersStudentsITProjects/Iptables
+Vcs-Git: git://github.com/EngineersStudentsITProjects/Iptables.git
+Vcs-Browser: https://github.com/EngineersStudentsITProjects/Iptables
+
+Package: iptables-loader
+Architecture: all
+Depends: ${misc:Depends}, bash (>= 4.0), iptables
+Description:This is an iptables bash loader script
+ Load iptables rules with a high lever of abstraction
+ Check all iptables rules insertion to prevent fail. rollback all rules on
+ first error.
