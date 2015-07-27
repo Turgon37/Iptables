@@ -1,4 +1,4 @@
-# Iptables
+# Iptables Loader
 
 This project is licensed under the terms of the MIT license
 
@@ -16,7 +16,7 @@ Take care, the default given configuration correspond to a server usage, and it'
 Run the script as root user manually from it location like
 
 ```bash
-  ./iptables.sh COMMAND  
+  ./iptables-loader.sh COMMAND  
 ```
 
 Use the `help` command to show the full list of COMMAND
@@ -33,10 +33,12 @@ See the CONFIG.md file for configuration details
 
 ## Installation
 
+Currently this script is only available for System-V init
+
 ### On debian installation
 
-  1. Put the script into an appropriate folder and copy the service files from github init.d/ folder into your system /etc/init.d/ folder
-  2. or simply install the provided deb package
+  1. Put the script into an appropriate folder and copy the service files from github service/ folder into your system /etc/init.d/ folder
+  2. You can build the Debian deb package with the given Makefile. Use `make package-debian` then `make build-debian` 
     The service can be managed by /etc/init.d/iptables script or by the distribution available command such as ```service```
 
 ##### Requires:
