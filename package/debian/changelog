@@ -1,3 +1,17 @@
+iptables-loader (3.3.1-1) wheezy; urgency=low
+
+  * Push manuals COMMANDS to load_rules parser
+
+ -- Pierre GINDRAUD <pgindraud@gmail.com>  Sun, 18 Oct 2015 22:03:00 +0200
+
+iptables-loader (3.3.0-1) wheezy; urgency=low
+
+  * Delete useless features like ddos rules and icmp rule
+   rebuild the commands loading engine
+
+ -- Pierre GINDRAUD <pgindraud@gmail.com>  Sun, 18 Oct 2015 20:32:00 +0200
+
+
 iptables-loader (3.2.1-1) wheezy; urgency=low
 
   * Separate COMMAND into PRE and POST command

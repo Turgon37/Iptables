@@ -12,7 +12,7 @@ man_dir = $(sharedir)/man
 man1_dir = $(mandir)/man1
 
 # main version of the program
-VERSION = 3.2.1
+VERSION = 3.3.1
 
 # the target binary
 target = iptables-loader.sh

@@ -1,5 +1,5 @@
 #!/bin/bash
-#title         :iptables
+#title         :iptables-loader
 #description   :Configure rules for iptables firewall
 #author        :P.GINDRAUD, T.PAJON
 #author_contact:pgindraud@gmail.com,th.pajon45@gmail.com
@@ -11,7 +11,7 @@
 # This script is currently under development, please take a real care to report
 # all errors, and don't worry about using debug option to control the good
 #  running of the script
-readonly VERSION='3.3.0'
+readonly VERSION='3.3.1'
 #==============================================================================
 INPUT=
 OUTPUT=
@@ -253,6 +253,7 @@ function _policy {
 # Load network rules
 # @param [string] : the configuration string from configuration file
 # @param [string] OPTIONNAL : the name of the chain in which to load the rules
+#                           if set to 'NONE' =>disable auto complete
 # @param [string] OPTIONNAL : the table name in which include new rules
 # @return [int] : 0 if all rule are correctly set
 #                X  the iptables return code
@@ -365,22 +366,24 @@ function _load_rules() {
       fi
     done
 
-    if [[ ! "$entry" =~ ^.*(-t|--table).*$ ]]; then
-      if [[ -z $table ]]; then
-        table="--table $DEFAULT_TABLE"
-      else
-        table="--table $table"
+    if [[ $chain != 'NONE' ]]; then
+      if [[ ! "$entry" =~ ^.*(-t|--table).*$ ]]; then
+        if [[ -z $table ]]; then
+          table="--table $DEFAULT_TABLE"
+        else
+          table="--table $table"
+        fi
       fi
-    fi
 
-    # NO ADD METHOD
-    if [[ ! "$entry" =~ ^.*(-A|--append|-I|--insert).*$ && -n $chain ]]; then
-      method_add="--append $chain"
-    fi
+      # NO ADD METHOD
+      if [[ ! "$entry" =~ ^.*(-A|--append|-I|--insert).*$ && -n $chain ]]; then
+        method_add="--append $chain"
+      fi
 
-    # NO ACTION in the entire line => default action
-    if [[ -n $DEFAULT_ACTION && -z $action_opt && ! "$entry" =~ ^.*(-j|--jump).*$ ]]; then
-      action_opt="--jump $DEFAULT_ACTION"
+      # NO ACTION in the entire line => default action
+      if [[ -n $DEFAULT_ACTION && -z $action_opt && ! "$entry" =~ ^.*(-j|--jump).*$ ]]; then
+        action_opt="--jump $DEFAULT_ACTION"
+      fi
     fi
     _run_command "$table_add $method_add $in_iface $out_iface $src_address $dst_address $protocol_opt $match_opt $other_opt $action_opt"
     r=$?
@@ -523,7 +526,7 @@ function do_start() {
   _reset_counters
 
   # MANUALS RULES
-  _run_command "$COMMANDS"
+  _load_rules "$COMMANDS" 'NONE'
   r=$?; if [[ $r -ne 0 ]]; then return $r; fi
 
   # LOAD MAIN RULES
