@@ -11,7 +11,7 @@
 # This script is currently under development, please take a real care to report
 # all errors, and don't worry about using debug option to control the good
 #  running of the script
-readonly VERSION='3.3.1'
+readonly VERSION='3.3.2'
 #==============================================================================
 INPUT=
 OUTPUT=
@@ -270,7 +270,7 @@ function _load_rules() {
     _error 'An forbidden character is found'
     return 105
   fi
-  _debug "# entering _load_rules : $1"
+  _debug "# entering _load_rules : $2"
   # set the internal field separator to newline only
   IFS=$'\n'
   # Loop for each rule (separated by space)
@@ -325,7 +325,7 @@ function _load_rules() {
         in_iface=$(parseIface "$c" '.*'${C_SEP})
         if [[ -n $in_iface ]]; then
           # error during forward rule with an unique interface
-          if [[ "$1" =~ OUTPUT|POSTROUTING ]]; then
+          if [[ "$2" =~ OUTPUT|POSTROUTING ]]; then
             _error_config "Input interface specified in OUTPUT rule" $line $chain
             return 101
           fi
@@ -342,7 +342,7 @@ function _load_rules() {
         out_iface=$(parseIface "$c"  '.*'${C_SEP})
         if [[ -n $out_iface ]]; then
           # error during forward rule with an unique interface
-          if [[ "$1" =~ INPUT|PREROUTING ]]; then
+          if [[ "$2" =~ INPUT|PREROUTING ]]; then
             _error_config "Output interface specified in INPUT rule" $line $chain
             return 100
           fi

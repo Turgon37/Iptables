@@ -1,3 +1,9 @@
+iptables-loader (3.3.2-1) wheezy; urgency=low
+
+  * Fix a bug with COMMANDS parsing
+
+ -- Pierre GINDRAUD <pgindraud@gmail.com>  Sun, 18 Oct 2015 22:15:00 +0200
+
 iptables-loader (3.3.1-1) wheezy; urgency=low
 
   * Push manuals COMMANDS to load_rules parser
