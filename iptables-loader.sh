@@ -19,7 +19,6 @@ FORWARD=
 PREROUTING=
 POSTROUTING=
 IS_ROUTER=0
-IS_SECURITY_ENABLED=0
 DEFAULT_ACTION=ACCEPT
 DEFAULT_TABLE=filter
 TIMEOUT_FOR_TEST=5
@@ -51,10 +50,6 @@ readonly E_REG_FORBID='(\;)'
 # REGEX that describe a IFACE name
 readonly REG_IFACE='\([a-zA-Z*][a-zA-Z0-9*]*+\?\)'
 readonly REG_E_IFACE='([a-zA-Z*][a-zA-Z0-9*]*\+?)'
-
-# REGEX that describe a network ipv4 address
-readonly REG_IPV4='\(\(\([0-9]\|[1-9][0-9]\|1[0-9]\{2\}\|2[0-4][0-9]\|25[0-5]\).\)\{3\}\([0-9]\|[1-9][0-9]\|1[0-9]\{2\}\|2[0-4][0-9]\|25[0-5]\)\(/\([0-9]\|[12][0-9]\|3[0-2]\)\)\?\)'
-readonly REG_E_IPV4='((([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])(\/([0-9]|[12][0-9]|3[0-2]))?)'
 
 # REGEX that describe a port number (between 1 and 65535)
 readonly REG_PORT='\([0-9]\{1,4\}\|[1-5][0-9]\{4\}\|6[0-4][0-9]\{3\}\|65[0-4][0-9]\{2\}\|655[0-2][0-9]\|6553[0-5]\)'
@@ -171,8 +166,8 @@ function _isTrue() {
 # @param[string] OPTIONNAL : the REGEX suffix
 # @return[string] : If the regex match, return the IPV4 address name
 #                   which is contains in $1
-function parseAddress4() {
-  expr match "$1" "${2}${REG_IPV4}${3}"
+function parseAddress() {
+  expr match "$1" "${2}\([a-z0-9A-Z:./]\+\)${3}"
 }
 
 # Retrieve the iface name string from a input string
@@ -183,12 +178,6 @@ function parseAddress4() {
 #                   which is contains in $1
 function parseIface() {
   expr match "$1" "${2}${REG_IFACE}${3}"
-}
-
-# Return the list of availables interfaces
-# @return[string] : the list of availables interfaces
-function ifacesList() {
-  ip link show | awk -F': ' '/^[0-9]*:/{print $2}' | awk -F'\n' '{if ($1 ~ /'$REG_E_IFACE'/) print $1}'
 }
 
 ### ---
@@ -262,8 +251,8 @@ function _policy {
 ### GLOBAL RULES LOADING
 ### ---
 # Load network rules
-# @param [string] : the name of the chain in which to load the rules
 # @param [string] : the configuration string from configuration file
+# @param [string] OPTIONNAL : the name of the chain in which to load the rules
 # @param [string] OPTIONNAL : the table name in which include new rules
 # @return [int] : 0 if all rule are correctly set
 #                X  the iptables return code
@@ -272,12 +261,9 @@ function _policy {
 #                102 if missing or wrong syntax in rule
 #                105 a incorrect character have been found in given list of command
 function _load_rules() {
-  local chain=$1
+  local chain=$2
   local table=$3
   local line=0
-  if [[ -z $table ]]; then
-    table=$DEFAULT_TABLE
-  fi
 
   if [[ "$2" =~ $E_REG_FORBID ]]; then
     _error 'An forbidden character is found'
@@ -287,7 +273,7 @@ function _load_rules() {
   # set the internal field separator to newline only
   IFS=$'\n'
   # Loop for each rule (separated by space)
-  for entry in $2; do
+  for entry in $1; do
     line=$(($line+1))
     _debug "reading config entry : $entry"
     # if a sharp is found drop this line, it's a comment line
@@ -295,6 +281,8 @@ function _load_rules() {
       _debug "  => comment : $entry"
       continue
     fi
+    local table_add=
+    local method_add=
     local src_address=
     local dst_address=
     local in_iface=
@@ -303,7 +291,6 @@ function _load_rules() {
     local match_opt=
     local action_opt=
     local other_opt=
-    local add_method=
 
     IFS=$DEFAULT_IFS
     # Loop for each command (separated by F_SEP, pipe as default)
@@ -313,7 +300,7 @@ function _load_rules() {
       # SOURCE ADDRESS matching
       if [[ "$c" =~ ^(s|src)${C_SEP}.*$ ]]; then
         _debug "  => src addr : $c"
-        src_address=$(parseAddress4 "$c" '.*'${C_SEP})
+        src_address=$(parseAddress "$c" '.*'${C_SEP})
         if [[ -n $src_address && $src_address != '*' ]]; then
           src_address="--source $src_address"
         else
@@ -323,7 +310,7 @@ function _load_rules() {
       # DESTINATION ADDRESS matching
       elif [[ "$c" =~ ^(d|dst)${C_SEP}.*$ ]]; then
         _debug "  => dst addr : $c"
-        dst_address=$(parseAddress4 "$c" '.*'${C_SEP})
+        dst_address=$(parseAddress "$c" '.*'${C_SEP})
         if [[ -n $dst_address && $dst_address != '*' ]]; then
           dst_address="--destination $dst_address"
         else
@@ -378,16 +365,24 @@ function _load_rules() {
       fi
     done
 
+    if [[ ! "$entry" =~ ^.*(-t|--table).*$ ]]; then
+      if [[ -z $table ]]; then
+        table="--table $DEFAULT_TABLE"
+      else
+        table="--table $table"
+      fi
+    fi
+
     # NO ADD METHOD
-    if [[ ! "$entry" =~ ^.*(-A|--append|-I|--insert).*$ ]]; then
-      add_method="--append $chain"
+    if [[ ! "$entry" =~ ^.*(-A|--append|-I|--insert).*$ && -n $chain ]]; then
+      method_add="--append $chain"
     fi
 
     # NO ACTION in the entire line => default action
     if [[ -n $DEFAULT_ACTION && -z $action_opt && ! "$entry" =~ ^.*(-j|--jump).*$ ]]; then
       action_opt="--jump $DEFAULT_ACTION"
     fi
-    _run_command "--table $table $add_method $in_iface $out_iface $src_address $dst_address $protocol_opt $match_opt $other_opt $action_opt"
+    _run_command "$table_add $method_add $in_iface $out_iface $src_address $dst_address $protocol_opt $match_opt $other_opt $action_opt"
     r=$?
     if [[ $r -ne 0 ]]; then
       _error_config 'An error appear during the last command' $line $chain
@@ -469,28 +464,6 @@ function _match() {
   return 1
 }
 
-# Provide a module for loading a table with some anti ddos rules
-# @param[string] : the name of the new chain
-# @param[string] : the comma-separated list of chains in which the jump statement must be put
-# @param[string] OPTIONNAL : the table name in which include new chain
-function _create_chain() {
-  local chain=$1
-  local table=$3
-  if [[ -z $table ]]; then
-    table=$DEFAULT_TABLE
-  fi
-
-  # create the new chain
-  _run_command "--table $table --new-chain $chain"
-  r=$?; if [[ $r -ne 0 ]]; then return $r; fi
-
-  # add jump from other chain to the new one
-  for ch in ${2//,/ }; do
-    _run_command "--table $table --insert $ch 1 --jump $chain"
-    r=$?; if [[ $r -ne 0 ]]; then return $r; fi
-  done
-}
-
 ### ---
 ### IPTABLES COMMAND
 ### ---
@@ -537,33 +510,6 @@ function _run_command() {
   IFS=$DEFAULT_IFS
 }
 
-### ---
-### SECURITY RULES LOADING
-### ---
-# Provide a module for loading a table with some network security rules
-function _load_security_rules() {
-  local forward=
-  if _isTrue $IS_ROUTER; then
-    forward=',FORWARD'
-  fi
-
-  if _isTrue "$SECURITY_DDOS_RULES"; then
-    _create_chain 'DDOS_PROTECT' "INPUT$forward"
-    r=$?; if [[ $r -ne 0 ]]; then return $r; fi
-
-    _load_rules 'DDOS_PROTECT' "$DDOS_RULES"
-    r=$?; if [[ $r -ne 0 ]]; then return $r; fi
-  fi
-
-  if _isTrue "$SECURITY_ICMP_RULES"; then
-    _create_chain "ICMP_PROTECT" "INPUT,OUTPUT$forward"
-    r=$?; if [[ $r -ne 0 ]]; then return $r; fi
-
-    _load_rules 'ICMP_PROTECT' "$ICMP_RULES"
-    r=$?; if [[ $r -ne 0 ]]; then return $r; fi
-  fi
-}
-
 ############################
 # Start the Firewall rules #
 ############################
@@ -575,31 +521,30 @@ function do_start() {
   _flush_rules
   _flush_chains
   _reset_counters
-  _policy 'drop'
+
+  # MANUALS RULES
+  _run_command "$COMMANDS"
+  r=$?; if [[ $r -ne 0 ]]; then return $r; fi
 
   # LOAD MAIN RULES
-  _load_rules INPUT "$INPUT"
+  _load_rules "$INPUT" 'INPUT'
   r=$?; if [[ $r -ne 0 ]]; then return $r; fi
-  _load_rules OUTPUT "$OUTPUT"
+  _load_rules "$OUTPUT" 'OUTPUT'
   r=$?; if [[ $r -ne 0 ]]; then return $r; fi
 
   # ROUTING RULES
   if _isTrue $IS_ROUTER; then
-    _load_rules PREROUTING "$PREROUTING" nat
+    _load_rules "$PREROUTING" 'PREROUTING' 'nat'
     r=$?; if [[ $r -ne 0 ]]; then return $r; fi
 
-    _load_rules FORWARD "$FORWARD"
+    _load_rules "$FORWARD" 'FORWARD'
     r=$?; if [[ $r -ne 0 ]]; then return $r; fi
 
-    _load_rules POSTROUTING "$POSTROUTING" nat
+    _load_rules "$POSTROUTING" 'POSTROUTING' 'nat'
     r=$?; if [[ $r -ne 0 ]]; then return $r; fi
   fi
 
-  # SECURITY RULES
-  if _isTrue "$IS_SECURITY_ENABLED"; then
-    _load_security_rules
-    r=$?; if [[ $r -ne 0 ]]; then return $r; fi
-  fi
+  _policy 'drop'
 }
 
 ###########################
