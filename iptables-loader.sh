@@ -61,8 +61,8 @@ readonly REG_PORT='\([0-9]\{1,4\}\|[1-5][0-9]\{4\}\|6[0-4][0-9]\{3\}\|65[0-4][0-
 readonly REG_E_PORT='([0-9]{1,4}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5])'
 
 # REGEX that describe a port range like PORT-PORT (use this for port matching)
-readonly REG_RANGE="\(${REG_PORT}\(-${REG_PORT}\)\?\)"
-readonly REG_E_RANGE="(${REG_E_PORT}(-${REG_E_PORT})?)"
+readonly REG_RANGE="\(${REG_PORT}\(:${REG_PORT}\)\?\)"
+readonly REG_E_RANGE="(${REG_E_PORT}(:${REG_E_PORT})?)"
 
 # REGEX that qualify a network which has a gateway
 readonly REG_E_GW="(${C_SEP}gw)"
@@ -303,7 +303,7 @@ function _load_rules() {
     local match_opt=
     local action_opt=
     local other_opt=
-    local add_method="--append $chain"
+    local add_method=
 
     IFS=$DEFAULT_IFS
     # Loop for each command (separated by F_SEP, pipe as default)
@@ -377,6 +377,11 @@ function _load_rules() {
         other_opt="$other_opt $c"
       fi
     done
+
+    # NO ADD METHOD
+    if [[ ! "$entry" =~ ^.*(-A|--append|-I|--insert).*$ ]]; then
+      add_method="--append $chain"
+    fi
 
     # NO ACTION in the entire line => default action
     if [[ -n $DEFAULT_ACTION && -z $action_opt && ! "$entry" =~ ^.*(-j|--jump).*$ ]]; then
