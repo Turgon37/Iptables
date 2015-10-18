@@ -8,21 +8,20 @@
 #usage_info    :use command 'help'
 #options       :debug
 #notes         :
-# This script is currently under development, please take a real care to report 
-# all errors, and don't worry about using debug option to control the good 
+# This script is currently under development, please take a real care to report
+# all errors, and don't worry about using debug option to control the good
 #  running of the script
-readonly VERSION='3.2.1'
+readonly VERSION='3.3.0'
 #==============================================================================
 INPUT=
 OUTPUT=
 FORWARD=
 PREROUTING=
 POSTROUTING=
-PRE_COMMANDS=
-POST_COMMANDS=
 IS_ROUTER=0
 IS_SECURITY_ENABLED=0
 DEFAULT_ACTION=ACCEPT
+DEFAULT_TABLE=filter
 TIMEOUT_FOR_TEST=5
 
 
@@ -38,6 +37,7 @@ readonly C_SEP=':'
 
 
 #========== INTERNAL VARIABLES ==========#
+IS_SIMULATION=0
 IS_DEBUG=0
 IS_VERBOSE=0
 
@@ -67,14 +67,6 @@ readonly REG_E_RANGE="(${REG_E_PORT}(-${REG_E_PORT})?)"
 # REGEX that qualify a network which has a gateway
 readonly REG_E_GW="(${C_SEP}gw)"
 
-#REGEX that describe a connection state
-readonly REG_STATE="\(INVALID\|ESTABLISHED\|NEW\|RELATED\|UNTRACKED\)"
-readonly REG_E_STATE="(INVALID|ESTABLISHED|NEW|RELATED|UNTRACKED)"
-
-# REGEX that describe a TCP flag
-readonly REG_FLAG="\(SYN\|ACK\|FIN\|RST\|URG\|PSH\|ALL\|NONE\)"
-readonly REG_E_FLAG="(SYN|ACK|FIN|RST|URG|PSH|ALL|NONE)"
-
 #========== INTERNAL FUNCTIONS ==========#
 
 # Print help msg
@@ -99,16 +91,17 @@ Command :
   help      show this help message
 
 Options :
-  -v, --verbose   Show more running messages 
+  -s, --simulate  No action
+  -v, --verbose   Show more running messages
   -d, --debug     Show debug messages
 
 Return code :
   0     Success
   1-98  Reserved for iptables error code
   99    Unknown error
-  100   Error input rules with a output interface
-  101   Error output rules with a input interface
-  102   Single interface in a forward rule
+  100   Error input rules in a output chains
+  101   Error output rules in a input chains
+  102   Bad or missing syntax in rule
   105   Incorrect character in configuration file
   106   Incorrect numeric value for a variable
   107   Incorrect string value for a variable
@@ -137,6 +130,14 @@ function _error() {
   if [[ $IS_VERBOSE -eq 1 ]]; then
     echo -e "Error : $*" 1>&2
   fi
+}
+
+# Print a msg to stderr if verbose option is set
+# @param [string] : the msg to write in stderr
+# @param [int] : the line number
+# @param [string] : the name of key in config
+function _error_config() {
+  _error "$1 at line $2 in $3"
 }
 
 # Print a msg to stdout if debug verbose is set
@@ -195,21 +196,24 @@ function ifacesList() {
 ### ---
 # Remove all rules in all chains
 function _flush_rules() {
-  $IPTABLES --table filter --flush
-  $IPTABLES --table nat --flush
-  $IPTABLES --table mangle --flush
+  _debug 'entering flush rules'
+  _run_command '--flush' '--table filter'
+  _run_command '--flush' '--table nat'
+  _run_command '--flush' '--table mangle'
 }
 # Remove all user defined chains (these what are not built in)
 function _flush_chains() {
-  $IPTABLES --table filter --delete-chain
-  $IPTABLES --table nat --delete-chain
-  $IPTABLES --table mangle --delete-chain
+  _debug 'entering flush chains'
+  _run_command '--delete-chain' '--table filter'
+  _run_command '--delete-chain' '--table nat'
+  _run_command '--delete-chain' '--table mangle'
 }
 # Reset all packets counter
 function _reset_counters() {
-  $IPTABLES --table filter --zero
-  $IPTABLES --table nat --zero
-  $IPTABLES --table mangle --zero
+  _debug 'entering reset counter'
+  _run_command '--zero' '--table filter'
+  _run_command '--zero' '--table nat'
+  _run_command '--zero' '--table mangle'
 }
 
 ### ---
@@ -221,27 +225,34 @@ function _policy {
   if [[ "$1" = 'accept' ]]; then
     _debug 'setting policy to accept'
     # FILTER
-    $IPTABLES --table filter --policy INPUT ACCEPT
-    $IPTABLES --table filter --policy OUTPUT ACCEPT
+    pol='
+--policy INPUT ACCEPT
+--policy OUTPUT ACCEPT'
 
     if _isTrue $IS_ROUTER; then
-      $IPTABLES --table filter --policy FORWARD ACCEPT
+      pol="$pol
+--policy FORWARD ACCEPT"
     else
-      $IPTABLES --table filter --policy FORWARD DROP
+      pol="$pol
+--policy FORWARD DROP"
     fi
+    _run_command "$pol" '--table filter'
 
     # NAT
-    $IPTABLES --table nat --policy PREROUTING ACCEPT
-    $IPTABLES --table nat --policy OUTPUT ACCEPT
-    $IPTABLES --table nat --policy INPUT ACCEPT
-    $IPTABLES --table nat --policy POSTROUTING ACCEPT
+    pol='
+--policy PREROUTING ACCEPT
+--policy OUTPUT ACCEPT
+--policy INPUT ACCEPT
+--policy POSTROUTING ACCEPT'
+    _run_command "$pol" '--table nat'
   elif [[ "$1" = 'drop' ]]; then
     _debug 'setting policy to drop'
     # FILTER
-    $IPTABLES --table filter --policy INPUT DROP
-    $IPTABLES --table filter --policy OUTPUT DROP
-
-    $IPTABLES --table filter --policy FORWARD DROP
+    pol='
+--policy INPUT DROP
+--policy OUTPUT DROP
+--policy FORWARD DROP'
+    _run_command "$pol" '--table filter'
   else
     _error 'Undefined global policy'
   fi
@@ -251,31 +262,33 @@ function _policy {
 ### GLOBAL RULES LOADING
 ### ---
 # Load network rules
-# @param[string] : the name of the chain in which to load the rules
-# @param[string] : the configuration string from configuration file
-# @param[string] OPTIONNAL : the table name in which include new rules
-# @return[int] : 0 if all rule are correctly set
+# @param [string] : the name of the chain in which to load the rules
+# @param [string] : the configuration string from configuration file
+# @param [string] OPTIONNAL : the table name in which include new rules
+# @return [int] : 0 if all rule are correctly set
 #                X  the iptables return code
-#                100 if an input rule is declare with a output interface
-#                101 if an output rule is declare with a input interface
-#                102 if a single interface is given for FORWARD table
+#                100 if an input rule is declare with a output chain
+#                101 if an output rule is declare with a input chain
+#                102 if missing or wrong syntax in rule
 #                105 a incorrect character have been found in given list of command
 function _load_rules() {
   local chain=$1
   local table=$3
+  local line=0
   if [[ -z $table ]]; then
-    table=filter
+    table=$DEFAULT_TABLE
   fi
-  
+
   if [[ "$2" =~ $E_REG_FORBID ]]; then
     _error 'An forbidden character is found'
     return 105
   fi
-  _debug "# entering _load_filter_rules : $1"
+  _debug "# entering _load_rules : $1"
   # set the internal field separator to newline only
   IFS=$'\n'
   # Loop for each rule (separated by space)
   for entry in $2; do
+    line=$(($line+1))
     _debug "reading config entry : $entry"
     # if a sharp is found drop this line, it's a comment line
     if [[ ${entry:0:1} = "#" ]]; then
@@ -289,113 +302,90 @@ function _load_rules() {
     local protocol_opt=
     local match_opt=
     local action_opt=
-    local add_method="--append $1"
-    
+    local other_opt=
+    local add_method="--append $chain"
+
     IFS=$DEFAULT_IFS
     # Loop for each command (separated by F_SEP, pipe as default)
     for c in $entry; do
-      local match=
-      local protocol=
-      local action=
+      local r=0
+
       # SOURCE ADDRESS matching
-      if [[ "$c" =~ ^APPEND$ ]]; then
-        _debug "  => add method : $c"
-        add_method="--append $1"
-      elif [[ "$c" =~ ^INSERT${C_SEP}[1-9]+$ ]]; then
-        _debug "  => add method : $c"
-        local number
-        
-        number=$(expr match "$c" ".*:\([1-9]\+\)")
-        if [[ -n $number ]]; then
-          add_method="--insert $1 $number"
-        fi
-      elif [[ "$c" =~ ^(s|src)${C_SEP}${REG_E_IPV4}$ ]]; then
+      if [[ "$c" =~ ^(s|src)${C_SEP}.*$ ]]; then
         _debug "  => src addr : $c"
         src_address=$(parseAddress4 "$c" '.*'${C_SEP})
         if [[ -n $src_address && $src_address != '*' ]]; then
           src_address="--source $src_address"
         else
-          src_address=
+          _error_config "Missing source address" $line $chain
+          return 102
         fi
       # DESTINATION ADDRESS matching
-      elif [[ "$c" =~ ^(d|dst)${C_SEP}${REG_E_IPV4}$ ]]; then
+      elif [[ "$c" =~ ^(d|dst)${C_SEP}.*$ ]]; then
         _debug "  => dst addr : $c"
         dst_address=$(parseAddress4 "$c" '.*'${C_SEP})
         if [[ -n $dst_address && $dst_address != '*' ]]; then
           dst_address="--destination $dst_address"
         else
-          dst_address=
+          _error_config "Missing destination address" $line $chain
+          return 102
         fi
-      # PROTOCOL matching
-      elif _protocol "$c"; then
-        protocol_opt="$protocol_opt $protocol"
-      # MATCH matching
-      elif _match "$c"; then
-        match_opt="$match_opt $match"
-      # ACTION matching
-      elif _action "$c"; then
-        action_opt="$action_opt $action"
-      # SINGLE INTERFACE matching
-      elif [[ "$c" =~ ^${REG_E_IFACE}$ ]]; then
-        _debug "  => iface : $c"
+      # INPUT INTERFACE matching
+      elif [[ "$c" =~ ^(i|in)${C_SEP}.*$ ]]; then
+        _debug "  => in iface : $c"
         # interface
-        iface=$(parseIface "$c")
-        if [[ -n $iface ]]; then
+        in_iface=$(parseIface "$c" '.*'${C_SEP})
+        if [[ -n $in_iface ]]; then
           # error during forward rule with an unique interface
-          if [[ $1 = 'FORWARD' ]]; then
-            _error "single interface in $chain chain (ambiguous rules) '$entry'"
-            return 102
-          elif [[ "$1" =~ INPUT|PREROUTING ]]; then
-            in_iface="--in-interface $iface"
-          elif [[ "$1" =~ OUTPUT|POSTROUTING ]]; then
-            out_iface="--out-interface $iface"
-          fi
-        else
-          in_iface=
-          out_iface=
-        fi
-      
-      # IN/OUT INTERFACE matching
-      elif [[ "$c" =~ ^${REG_E_IFACE}${C_SEP}${REG_E_IFACE}$ ]]; then
-        _debug "  => iface+iface : $c"
-        
-        # input interface
-        in_iface=$(parseIface "$c")
-        if [[ -n $in_iface && $in_iface != '*' ]]; then
-          # error during output rule with an input interface
-          if [[ $1 =~ OUTPUT|POSTROUTING ]]; then
-            _error "input interface in $chain chain '$entry'"
+          if [[ "$1" =~ OUTPUT|POSTROUTING ]]; then
+            _error_config "Input interface specified in OUTPUT rule" $line $chain
             return 101
           fi
           in_iface="--in-interface $in_iface"
         else
-          in_iface=
+          _error_config "Bad interface name" $line $chain
+          return 102
         fi
-        
+      # OUTPUT INTERFACE matching
+      elif [[ "$c" =~ ^(o|out)${C_SEP}.*$ ]]; then
+        _debug "  => out iface : $c"
+
         # output interface
-        out_iface=$(parseIface "$c" '.*'${C_SEP})
-        if [[ -n $out_iface && $out_iface != '*' ]]; then
-          # error during input rule with an output interface
-          if [[ $1 =~ INPUT|PREROUTING ]]; then
-            _error "output interface in $chain chain '$entry'"
+        out_iface=$(parseIface "$c"  '.*'${C_SEP})
+        if [[ -n $out_iface ]]; then
+          # error during forward rule with an unique interface
+          if [[ "$1" =~ INPUT|PREROUTING ]]; then
+            _error_config "Output interface specified in INPUT rule" $line $chain
             return 100
           fi
           out_iface="--out-interface $out_iface"
         else
-          out_iface=
+          _error_config "Bad interface name" $line $chain
+          return 102
         fi
+      # PROTOCOL matching
+      elif _protocol "$c"; then
+        if [[ $r -ne 0 ]]; then
+          return 102
+        fi
+        protocol_opt="$protocol_opt $protocol"
+      # MATCH matching
+      elif _match "$c"; then
+        match_opt="$match_opt $match"
       else
-        _error "error reading line : $entry"
+        _debug "  => other : $c"
+        other_opt="$other_opt $c"
       fi
     done
-    # NO ACTION => default action
-    if [[ -z $action_opt ]]; then
+
+    # NO ACTION in the entire line => default action
+    if [[ -n $DEFAULT_ACTION && -z $action_opt && ! "$entry" =~ ^.*(-j|--jump).*$ ]]; then
       action_opt="--jump $DEFAULT_ACTION"
     fi
-    $IPTABLES --table $table $add_method $in_iface $out_iface $src_address $dst_address $protocol_opt $match_opt $action_opt
-    local r=$?
+    _run_command "--table $table $add_method $in_iface $out_iface $src_address $dst_address $protocol_opt $match_opt $other_opt $action_opt"
+    r=$?
     if [[ $r -ne 0 ]]; then
-      _error 'An error appear during the last command'
+      _error_config 'An error appear during the last command' $line $chain
       return $r
     fi
     IFS=$'\n'
@@ -406,57 +396,48 @@ function _load_rules() {
 }
 
 # Parse protocol rules
-# @param[string] : the input string in which search for matching rules
-# @return[int] : 0 if a match success and the match command is returned in 'protocol' shell variable
+# @param [string] : the input string in which search for matching rules
+# @return [int] : 0 if a match success and the match command is returned in
+#                         'protocol' shell variable
 #                1 if no match is performed
 function _protocol() {
   _debug "  reading protocol entry : $1"
+  r=0
 
   # TCP matching
-  if [[ "$1" =~ ^tcp(${C_SEP}${REG_E_RANGE}(${C_SEP}${REG_E_RANGE})?)?$ ]]; then
+  if [[ "$1" =~ ^tcp$ ]]; then
     _debug "    => proto tcp : $1"
-    local src_port
-    local dst_port
-    
-    dst_port=$(expr match "$1" "tcp${C_SEP}.+${C_SEP}${REG_RANGE}")
-    src_port=$(expr match "$1" "tcp${C_SEP}${REG_RANGE}")
-    # full port matching (source and destination)
-    if [[ -n $src_port && -n $dst_port ]]; then
-      src_port="--source-port ${src_port//-/:}"
-      dst_port="--destination-port ${dst_port//-/:}"
-    # partial port matching (only destination)
-    elif [[ -n $src_port ]]; then
-      dst_port="--destination-port ${src_port//-/:}"
-      src_port=
-    fi
-
-    protocol="--protocol tcp $src_port $dst_port"
+    protocol="--protocol tcp"
     return 0
   # UDP matchingTIMEOUT_FOR_TEST
-  elif [[ "$1" =~ ^udp(${C_SEP}${REG_E_RANGE}(${C_SEP}${REG_E_RANGE})?)?$ ]]; then
+  elif [[ "$1" =~ ^udp$ ]]; then
     _debug "    => proto udp : $1"
+    protocol="--protocol udp"
+    return 0
+  elif [[ "$1" =~ ^sp${C_SEP}.*$ ]]; then
     local src_port
-    local dst_port
-
-    src_port=$(expr match "$1" "udp${C_SEP}${REG_RANGE}")
-    dst_port=$(expr match "$1" "udp${C_SEP}.+${C_SEP}${REG_RANGE}")
-    # full port matching (source and destination)
-    if [[ -n $src_port && -n $dst_port ]]; then
-      src_port="--source-port ${src_port//-/:}"
-      dst_port="--destination-port ${dst_port//-/:}"
-    # partial port matching (only destination)
-    elif [[ -n $src_port ]]; then
-      dst_port="--destination-port ${src_port//-/:}"
-      src_port=
+    src_port=$(expr match "$1" "sp${C_SEP}${REG_RANGE}")
+    if [[ -z $src_port  ]]; then
+      r=102
+      _error 'Empty source port'
     fi
-
-    protocol="--protocol udp $src_port $dst_port"
+    protocol="--source-port $src_port"
+    return 0
+  elif [[ "$1" =~ ^dp${C_SEP}.*$ ]]; then
+    local src_port
+    dst_port=$(expr match "$1" "dp${C_SEP}${REG_RANGE}")
+    if [[ -z $dst_port  ]]; then
+      r=102
+      _error 'Empty destination port'
+    fi
+    protocol="--destination-port $dst_port"
     return 0
   # ICMP matching
   elif [[ "$1" =~ ^icmp(${C_SEP}[-a-zA-Z0-9/]+)?$ ]]; then
     _debug "    => proto icmp : $1"
-    local type=$(expr match "$1" ".*${C_SEP}\([-a-zA-Z0-9/]\+\)")
+    local type=
 
+    type=$(expr match "$1" ".*${C_SEP}\([-a-zA-Z0-9/]\+\)")
     if [[ -n $type ]]; then
       type="--icmp-type $type"
     fi
@@ -474,61 +455,12 @@ function _protocol() {
 #                1 if no match is performed
 function _match() {
   _debug "  reading matching entry : $1"
-
-  if [[ "$1" =~ ^state${C_SEP}${REG_E_STATE}(,${REG_E_STATE})*$ ]]; then
-    _debug "    => match : state : $1"
-    match='-m state --state '$(expr match "$1" "state${C_SEP}\($REG_STATE\(,$REG_STATE\)*\)")
-    return 0
-  elif [[ "$1" =~ ^(c|comment)${C_SEP}[-_a-zA-Z0-9]+$ ]]; then
+  if [[ "$1" =~ ^(c|comment)${C_SEP}[-_a-zA-Z0-9]+$ ]]; then
     _debug "    => match : comment : $1"
     match='-m comment --comment '$(expr match "$1" ".*${C_SEP}\([-_a-zA-Z0-9]\+\)")
     return 0
-  elif [[ "$1" =~ ^(sports|dports|ports)${C_SEP}${REG_E_RANGE}(,${REG_E_RANGE})*$ ]]; then
-    _debug "    => match : multiport : $1"
-    local method
-    local port
-    method=$(expr match "$1" "\(sports\|dports\|ports\)${C_SEP}.*")
-    port=$(expr match "$1" ".*${C_SEP}\(${REG_RANGE}\(,${REG_RANGE}\)*\)")
-    
-    match="--match multiport --$method ${port//-/:}"
-    return 0
-  elif [[ "$1" =~ ^tcp${C_SEP}(syn|SYN)$ ]]; then
-    _debug "    => match : tcp flag syn: $1"
-    match='--syn'
-    return 0
-  elif [[ "$1" =~ ^tcp${C_SEP}${REG_E_FLAG}(,${REG_E_FLAG})*${C_SEP}${REG_E_FLAG}(,${REG_E_FLAG})*$ ]]; then
-    _debug "    => match : tcp flag : $1"
-    match='--tcp-flags '$(expr match "$1" "tcp${C_SEP}\($REG_FLAG\(,$REG_FLAG\)*\)")' '$(expr match "$1" "tcp${C_SEP}.*${C_SEP}\($REG_FLAG\(,$REG_FLAG\)*\)")
-    return 0
   fi
-
   match=
-  return 1
-}
-
-# Parse action
-# @param[string] : the input string in which search for matching rules
-# @return[int] : 0 if a match success and the match command is returned in action' shell variable
-#                1 if no match is performed
-function _action() {
-  _debug "  reading action entry : $1"
-  if [[ "$1" =~ ^(j|jump)${C_SEP}(ACCEPT|DROP|RETURN)$ ]]; then
-    action="--jump "$(expr match "$1" ".*${C_SEP}\(ACCEPT\|DROP\|RETURN\)")
-    return 0
-  elif [[ "$1" =~ ^(j|jump)${C_SEP}REJECT(${C_SEP}[-a-zA-Z]+)?$ ]]; then  
-    _debug "    => action : REJECT : $1"
-    code=$(expr match "$1" ".*${C_SEP}REJECT${C_SEP}\([-a-ZA-Z]\+\)")
-    if [[ -n $code ]]; then
-      code="--reject-with $code"
-    fi
-    action="--jump REJECT $code"
-    return 0
-  elif [[ "$1" =~ ^(j|jump)${C_SEP}MASQUERADE$ && $table = 'nat' && $chain = 'POSTROUTING' ]]; then
-      action='--jump MASQUERADE'
-      return 0
-  fi
-
-  action=
   return 1
 }
 
@@ -540,16 +472,16 @@ function _create_chain() {
   local chain=$1
   local table=$3
   if [[ -z $table ]]; then
-    table=filter
+    table=$DEFAULT_TABLE
   fi
 
   # create the new chain
-  _run_command "--table filter --new-chain $chain"
+  _run_command "--table $table --new-chain $chain"
   r=$?; if [[ $r -ne 0 ]]; then return $r; fi
 
   # add jump from other chain to the new one
   for ch in ${2//,/ }; do
-    _run_command "--table filter --insert $ch 1 --jump $chain"
+    _run_command "--table $table --insert $ch 1 --jump $chain"
     r=$?; if [[ $r -ne 0 ]]; then return $r; fi
   done
 }
@@ -583,7 +515,12 @@ function _run_command() {
     IFS=$DEFAULT_IFS
     cmd="$prefix $cmd"
     _debug "  => command : $cmd"
-    $IPTABLES $cmd
+    if [[ $IS_SIMULATION -eq 1 ]]; then
+      echo -e "SIMULATE: $cmd"
+    else
+      $IPTABLES $cmd
+    fi
+
     r=$?
     if [[ $r -ne 0 ]]; then
       _error 'An error appear during the last command'
@@ -606,18 +543,18 @@ function _load_security_rules() {
   fi
 
   if _isTrue "$SECURITY_DDOS_RULES"; then
-    _create_chain "DDOS_PROTECT" "INPUT$forward"
+    _create_chain 'DDOS_PROTECT' "INPUT$forward"
     r=$?; if [[ $r -ne 0 ]]; then return $r; fi
-    
-    _run_command "$DDOS_RULES" "--table filter --append DDOS_PROTECT"
+
+    _load_rules 'DDOS_PROTECT' "$DDOS_RULES"
     r=$?; if [[ $r -ne 0 ]]; then return $r; fi
   fi
 
   if _isTrue "$SECURITY_ICMP_RULES"; then
     _create_chain "ICMP_PROTECT" "INPUT,OUTPUT$forward"
     r=$?; if [[ $r -ne 0 ]]; then return $r; fi
-    
-    _run_command "$ICMP_RULES" "--table filter --append ICMP_PROTECT"
+
+    _load_rules 'ICMP_PROTECT' "$ICMP_RULES"
     r=$?; if [[ $r -ne 0 ]]; then return $r; fi
   fi
 }
@@ -635,10 +572,6 @@ function do_start() {
   _reset_counters
   _policy 'drop'
 
-  # MANUAL PRE COMMAND
-  _run_command "$PRE_COMMANDS"
-  r=$?; if [[ $r -ne 0 ]]; then return $r; fi
-  
   # LOAD MAIN RULES
   _load_rules INPUT "$INPUT"
   r=$?; if [[ $r -ne 0 ]]; then return $r; fi
@@ -649,17 +582,13 @@ function do_start() {
   if _isTrue $IS_ROUTER; then
     _load_rules PREROUTING "$PREROUTING" nat
     r=$?; if [[ $r -ne 0 ]]; then return $r; fi
-    
+
     _load_rules FORWARD "$FORWARD"
     r=$?; if [[ $r -ne 0 ]]; then return $r; fi
-    
+
     _load_rules POSTROUTING "$POSTROUTING" nat
     r=$?; if [[ $r -ne 0 ]]; then return $r; fi
   fi
-  
-  # MANUAL COMMAND
-  _run_command "$POST_COMMANDS"
-  r=$?; if [[ $r -ne 0 ]]; then return $r; fi
 
   # SECURITY RULES
   if _isTrue "$IS_SECURITY_ENABLED"; then
@@ -777,24 +706,24 @@ function do_test() {
   echo "WARNING : Previous configuration will be restore in ${TIMEOUT_FOR_TEST} seconds if no action is performed."
   echo
   echo 'After typing the word "start" (with correct case) the new rules are going to be tested'
-  
+
   while [[ $input != start ]]; do
     read -n 5 input
     if [[ $input != start ]]; then
       echo -e '\nPlease carrefully read the message above and try again...'
     fi
   done
-  
+
   echo -e '\n * Testing new rules...'
   echo "Type 'ok' (ignore case) to apply new rules [wait for ${TIMEOUT_FOR_TEST}s]"
   do_restart
 
   read -t "${TIMEOUT_FOR_TEST}" -n 2 input
-  if [[ "$input" =~ ^(o|O)(k|K)$ ]]; then 
+  if [[ "$input" =~ ^(o|O)(k|K)$ ]]; then
     echo -e '\n * Applying new rules'
   else
     local debug_file
-    
+
     debug_file="/tmp/iptables_$(date +%Y-%m-%d_%H-%M)"
     do_save "$debug_file"
     echo ' * Rollback old rules'
@@ -818,13 +747,14 @@ function do_test() {
 # @return[int] : X the exit code of the script
 function main() {
   local r
-  
+
   _isRunAsRoot
-  
-  ### ARGUMENTS PARSING  
+
+  ### ARGUMENTS PARSING
   for i in $(seq $(($#+1))); do
     #catch main arguments
     case $1 in
+    -s|--simulate) IS_SIMULATION=1;;
     -v|--verbose) IS_VERBOSE=1;;
     -d|--debug) IS_DEBUG=1;;
     -*) _error "invalid option -- '$1'"
@@ -832,7 +762,7 @@ function main() {
     *)  if [[ $# -ge 1 ]]; then # GOT NEEDED ARGUMENTS
           main_command=$1
           break #stop reading arguments
-        else 
+        else
           _error 'missing command'
           exit 202
         fi
@@ -846,7 +776,7 @@ function main() {
 
     shift
   done
-  
+
   ## MAIN CHECK
   # Exit if the iptables command is not available
   if [[ ! -x "$IPTABLES" ]]; then
@@ -859,13 +789,13 @@ function main() {
     _error "The configuration file have not been source or is not readable"
     exit 204
   fi
-  
+
   # Exit if the defaultaction is invalid
-  if [[ ! $DEFAULT_ACTION =~ ^[a-zA-Z]+$ ]]; then
+  if [[ -n $DEFAULT_ACTION && ! $DEFAULT_ACTION =~ ^[a-zA-Z]+$ ]]; then
     _error "The default action is not a valid string"
     exit 107
   fi
-  
+
 
   ### MAIN RUNNING
   case "$main_command" in
@@ -946,6 +876,6 @@ function main() {
 
 ###### RUNNING ######
 # Load global configuration
-[[ -r $IPTABLES_CONFIG ]] && source $IPTABLES_CONFIG
+[[ -r $IPTABLES_CONFIG ]] && source "$IPTABLES_CONFIG"
 
 main "$@"
