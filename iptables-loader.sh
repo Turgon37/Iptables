@@ -11,7 +11,7 @@
 # This script is currently under development, please take a real care to report
 # all errors, and don't worry about using debug option to control the good
 #  running of the script
-readonly VERSION='3.3.2'
+readonly VERSION='3.3.3'
 #==============================================================================
 INPUT=
 OUTPUT=
@@ -48,8 +48,8 @@ readonly DEFAULT_IFS=$IFS
 readonly E_REG_FORBID='(\;)'
 
 # REGEX that describe a IFACE name
-readonly REG_IFACE='\([a-zA-Z*][a-zA-Z0-9*]*+\?\)'
-readonly REG_E_IFACE='([a-zA-Z*][a-zA-Z0-9*]*\+?)'
+readonly REG_IFACE='\([a-zA-Z*][a-zA-Z0-9*.:]*+\?\)'
+readonly REG_E_IFACE='([a-zA-Z*][a-zA-Z0-9*.:]*\+?)'
 
 # REGEX that describe a port number (between 1 and 65535)
 readonly REG_PORT='\([0-9]\{1,4\}\|[1-5][0-9]\{4\}\|6[0-4][0-9]\{3\}\|65[0-4][0-9]\{2\}\|655[0-2][0-9]\|6553[0-5]\)'
@@ -167,7 +167,7 @@ function _isTrue() {
 # @return[string] : If the regex match, return the IPV4 address name
 #                   which is contains in $1
 function parseAddress() {
-  expr match "$1" "${2}\([a-z0-9A-Z:./]\+\)${3}"
+  expr match "$1" "${2}\([a-z0-9A-Z:,./]\+\)${3}"
 }
 
 # Retrieve the iface name string from a input string
@@ -699,7 +699,7 @@ function do_test() {
 # @param[] : same of the script
 # @return[int] : X the exit code of the script
 function main() {
-  local r
+  local ret
 
   _isRunAsRoot
 
@@ -734,7 +734,7 @@ function main() {
   # Exit if the iptables command is not available
   if [[ ! -x "$IPTABLES" ]]; then
     _error "The iptables command is not in the path or not installed"
-    #exit 203
+    exit 203
   fi
 
   # Exit if the config have not been sourced
@@ -755,33 +755,33 @@ function main() {
   start)
     _echo "Setting firewall rules. Enable firewall secure policy"
     do_start
-    r=$?
-    case $r in
+    ret=$?
+    case $ret in
     0) _echo "=> Success";;
     *) _error "Failed to start the firewall."
       # flush rules after error during start
       do_stop
-      exit $r
+      exit $ret
       ;;
     esac
     ;;
   stop)
     _echo "Removing firewall rules. Turn firewall to open policy"
     do_stop
-    r=$?
-    case $r in
+    ret=$?
+    case $ret in
     0) _echo "=> Success";;
-    *) _error "Failed to stop the firewall."; exit $r;;
+    *) _error "Failed to stop the firewall."; exit $ret;;
     esac
     ;;
   restart)
     _echo "Re-setting firewall rules"
     do_restart
-    r=$?
-    case $r in
+    ret=$?
+    case $ret in
     # restart success
     0) _echo "=> Success";;
-    *) _error "Failed to restart the firewall."; exit $r;;
+    *) _error "Failed to restart the firewall."; exit $ret;;
     esac
     ;;
   list)
@@ -793,28 +793,28 @@ function main() {
   restore)
     _echo "Loading firewall rules from ${IPTABLES_BACKUP_FILE}"
     do_restore
-    r=$?
-    case "$r" in
+    ret=$?
+    case $ret in
     0) _echo "=> Success";;
-    *) _echo "=> Failure"; exit $r;;
+    *) _echo "=> Failure"; exit $ret;;
     esac
     ;;
   save)
     _echo "Saving firewall rules into ${IPTABLES_BACKUP_FILE}"
     do_save
-    r=$?
-    case "$r" in
+    ret=$?
+    case $ret in
     0) _echo "=> Success";;
-    *) _echo "=> Failure"; exit $r;;
+    *) _echo "=> Failure"; exit $ret;;
     esac
     ;;
   test)
     _echo "Testing new firewall ruleset"
     do_test
-    r=$?
-    case "$r" in
+    ret=$?
+    case $ret in
     0) _echo "=> Success";;
-    *) _echo "=> Failure"; exit $r;;
+    *) _echo "=> Failure"; exit $ret;;
     esac
     ;;
   help)

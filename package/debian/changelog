@@ -1,3 +1,10 @@
+iptables-loader (3.3.3-1) jessie; urgency=low
+
+  * Improve Interface Regex to read double point character
+  * Improve Network Address Regex to read list (comma separated)
+
+ -- Pierre GINDRAUD <pgindraud@gmail.com>  Sun, 18 Oct 2015 22:15:00 +0200
+
 iptables-loader (3.3.2-1) wheezy; urgency=low
 
   * Fix a bug with COMMANDS parsing

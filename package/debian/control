@@ -4,9 +4,9 @@ Priority: optional
 Maintainer: Pierre GINDRAUD <pgindraud@gmail.com>
 Build-Depends: debhelper (>= 9)
 Standards-Version: 3.9.6
-Homepage: https://github.com/EngineersStudentsITProjects/Iptables
-Vcs-Git: git://github.com/EngineersStudentsITProjects/Iptables.git
-Vcs-Browser: https://github.com/EngineersStudentsITProjects/Iptables
+Homepage: https://github.com/Turgon37/Iptables
+Vcs-Git: git://github.com/Turgon37/Iptables.git
+Vcs-Browser: https://github.com/Turgon37/Iptables
 
 Package: iptables-loader
 Architecture: all
