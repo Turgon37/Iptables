@@ -48,8 +48,8 @@ readonly DEFAULT_IFS=$IFS
 readonly E_REG_FORBID='(\;)'
 
 # REGEX that describe a IFACE name
-readonly REG_IFACE='\([a-zA-Z*][a-zA-Z0-9*.:]*+\?\)'
-readonly REG_E_IFACE='([a-zA-Z*][a-zA-Z0-9*.:]*\+?)'
+readonly REG_IFACE='\([a-zA-Z*][a-zA-Z0-9*.:-]*+\?\)'
+readonly REG_E_IFACE='([a-zA-Z*][a-zA-Z0-9*.:-]*\+?)'
 
 # REGEX that describe a port number (between 1 and 65535)
 readonly REG_PORT='\([0-9]\{1,4\}\|[1-5][0-9]\{4\}\|6[0-4][0-9]\{3\}\|65[0-4][0-9]\{2\}\|655[0-2][0-9]\|6553[0-5]\)'
