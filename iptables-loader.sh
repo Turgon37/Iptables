@@ -270,7 +270,7 @@ function _load_rules() {
     _error 'An forbidden character is found'
     return 105
   fi
-  _debug "# entering _load_rules : $2"
+  _debug "# entering _load_rules : $2 with table arg : $3"
   # set the internal field separator to newline only
   IFS=$'\n'
   # Loop for each rule (separated by space)
